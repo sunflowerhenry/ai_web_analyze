@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation'
 import ProxyConfigComponent from '@/components/ProxyConfig'
 import ConcurrencyConfig from '@/components/ConcurrencyConfig'
 import AntiDetectionConfig from '@/components/AntiDetectionConfig'
-import SystemProxyDetector from '@/components/SystemProxyDetector'
+import ServerIPDetector from '@/components/ServerIPDetector'
 
 interface SavedConfig {
   name: string
@@ -493,47 +493,6 @@ export default function ConfigPage() {
               全部保存
             </Button>
             
-            {/* 调试按钮 */}
-            <Button 
-              onClick={() => {
-                console.log('=== DEBUG INFO ===')
-                console.log('Current formData:', formData)
-                console.log('Current config from store:', config)
-                console.log('isInitialized:', isInitialized)
-                
-                // 检查localStorage
-                try {
-                  const storedData = localStorage.getItem('analysis-store')
-                  if (storedData) {
-                    const parsedData = JSON.parse(storedData)
-                    console.log('localStorage data:', parsedData)
-                  } else {
-                    console.log('No data in localStorage')
-                  }
-                } catch (error) {
-                  console.error('Error reading localStorage:', error)
-                }
-              }}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              🐛 调试
-            </Button>
-            
-            {/* 测试 Toast 按钮 */}
-            <Button 
-              onClick={() => {
-                toast.success('测试成功提醒')
-                setTimeout(() => toast.error('测试错误提醒'), 500)
-                setTimeout(() => toast.warning('测试警告提醒'), 1000)
-                setTimeout(() => toast.info('测试信息提醒'), 1500)
-              }}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              🔔 测试提醒
-            </Button>
-            
             <Button 
               onClick={handleGoBack}
               variant="outline"
@@ -547,54 +506,8 @@ export default function ConfigPage() {
       </div>
 
       <div className="grid gap-6">
-        {/* Toast 测试区域 */}
-        <Card className="border-blue-200 bg-blue-50/50">
-          <CardHeader>
-            <CardTitle className="text-blue-700">🔔 提醒功能测试</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              <Button 
-                onClick={() => toast.success('✅ 成功提醒测试')}
-                variant="outline"
-                size="sm"
-                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-              >
-                测试成功提醒
-              </Button>
-              <Button 
-                onClick={() => toast.error('❌ 错误提醒测试')}
-                variant="outline"
-                size="sm"
-                className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-              >
-                测试错误提醒
-              </Button>
-              <Button 
-                onClick={() => toast.warning('⚠️ 警告提醒测试')}
-                variant="outline"
-                size="sm"
-                className="bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100"
-              >
-                测试警告提醒
-              </Button>
-              <Button 
-                onClick={() => toast.info('ℹ️ 信息提醒测试')}
-                variant="outline"
-                size="sm"
-                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-              >
-                测试信息提醒
-              </Button>
-            </div>
-            <p className="text-sm text-blue-600 mt-2">
-              如果点击按钮后没有看到提醒弹窗，说明 toast 功能可能存在问题
-            </p>
-          </CardContent>
-        </Card>
-
         {/* 系统代理检测 */}
-        <SystemProxyDetector />
+        <ServerIPDetector />
 
         {/* 快速配置 */}
         <Card>
@@ -678,35 +591,6 @@ export default function ConfigPage() {
                   <Save className="h-4 w-4 mr-2" />
                   保存配置
                 </Button>
-                
-                <Button 
-                  variant="outline" 
-                  onClick={handleTest}
-                  disabled={isTesting || !formData.apiKey || !formData.apiUrl}
-                >
-                  {isTesting ? (
-                    <>
-                      <div className="h-4 w-4 mr-2 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      测试中...
-                    </>
-                  ) : (
-                    <>
-                      <TestTube className="h-4 w-4 mr-2" />
-                      测试连接
-                    </>
-                  )}
-                </Button>
-                
-                {testResult && (
-                  <Badge variant={testResult === 'success' ? 'default' : 'destructive'}>
-                    {testResult === 'success' ? (
-                      <CheckCircle className="h-3 w-3 mr-1" />
-                    ) : (
-                      <XCircle className="h-3 w-3 mr-1" />
-                    )}
-                    {testResult === 'success' ? '连接成功' : '连接失败'}
-                  </Badge>
-                )}
               </div>
 
               {/* 保存配置 */}
@@ -970,48 +854,166 @@ export default function ConfigPage() {
         )}
 
         {/* 使用说明 */}
-        <Card>
+        <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
           <CardHeader>
-            <CardTitle>使用说明</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-blue-800">
+              <div className="flex items-center justify-center w-8 h-8 bg-blue-100 rounded-lg">
+                📖
+              </div>
+              使用说明与支持的AI模型
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <div>
-                <h4 className="font-medium mb-2">OpenAI API</h4>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• 需要有效的OpenAI API密钥</li>
-                  <li>• 支持GPT-3.5、GPT-4等模型</li>
-                  <li>• API地址：https://api.openai.com/v1/chat/completions</li>
-                </ul>
-              </div>
-              
-              <div>
-                <h4 className="font-medium mb-2">DeepSeek API</h4>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• 国产AI模型，性价比高</li>
-                  <li>• 支持deepseek-chat、deepseek-coder</li>
-                  <li>• API地址：https://api.deepseek.com/v1/chat/completions</li>
-                </ul>
-              </div>
+          <CardContent className="space-y-6">
+            {/* AI模型支持 */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-gray-800 border-b border-blue-200 pb-2">
+                🤖 支持的AI模型
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center">
+                      🟢
+                    </div>
+                    <h4 className="font-semibold text-green-700">OpenAI API</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-500 mt-1">•</span>
+                      <span>需要有效的OpenAI API密钥</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-500 mt-1">•</span>
+                      <span>支持GPT-3.5、GPT-4、GPT-4o等模型</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-500 mt-1">•</span>
+                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">api.openai.com/v1/chat/completions</span>
+                    </li>
+                  </ul>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center">
+                      🔵
+                    </div>
+                    <h4 className="font-semibold text-blue-700">DeepSeek API</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-500 mt-1">•</span>
+                      <span>国产AI模型，性价比高</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-500 mt-1">•</span>
+                      <span>支持deepseek-chat、deepseek-coder</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-500 mt-1">•</span>
+                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">api.deepseek.com/v1/chat/completions</span>
+                    </li>
+                  </ul>
+                </div>
 
-              <div>
-                <h4 className="font-medium mb-2">OpenRouter API</h4>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• 统一多种AI模型接口</li>
-                  <li>• 支持GPT、Claude、Llama等</li>
-                  <li>• API地址：https://openrouter.ai/api/v1/chat/completions</li>
-                </ul>
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center">
+                      🟣
+                    </div>
+                    <h4 className="font-semibold text-purple-700">OpenRouter API</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-purple-500 mt-1">•</span>
+                      <span>统一多种AI模型接口</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-purple-500 mt-1">•</span>
+                      <span>支持GPT、Claude、Llama等</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-purple-500 mt-1">•</span>
+                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">openrouter.ai/api/v1/chat/completions</span>
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
 
-            <div className="border-t pt-4">
-              <h4 className="font-medium mb-2">配置管理功能</h4>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>• <strong>保存配置</strong>：将API配置保存到本地，方便快速切换</li>
-                <li>• <strong>保存提示词</strong>：保存常用的分析提示词模板</li>
-                <li>• <strong>快速加载</strong>：一键加载已保存的配置和提示词</li>
-                <li>• <strong>本地存储</strong>：所有数据保存在浏览器本地，安全可靠</li>
-              </ul>
+            {/* 功能特性 */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-gray-800 border-b border-blue-200 pb-2">
+                ⚙️ 主要功能特性
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                  <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                    <span className="text-blue-500">💾</span>
+                    配置管理
+                  </h4>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-1">▸</span>
+                      <span><strong>保存配置</strong>：将API配置保存到本地，方便快速切换</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-1">▸</span>
+                      <span><strong>保存提示词</strong>：保存常用的分析提示词模板</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-1">▸</span>
+                      <span><strong>快速加载</strong>：一键加载已保存的配置和提示词</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                  <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                    <span className="text-green-500">🔒</span>
+                    安全与隐私
+                  </h4>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400 mt-1">▸</span>
+                      <span><strong>本地存储</strong>：所有数据保存在浏览器本地</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400 mt-1">▸</span>
+                      <span><strong>密钥安全</strong>：API密钥不会上传到服务器</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400 mt-1">▸</span>
+                      <span><strong>代理支持</strong>：支持SOCKS5代理保护隐私</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* 快速开始 */}
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg p-4 text-white">
+              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                🚀 快速开始
+              </h3>
+              <ol className="text-sm space-y-2">
+                <li className="flex items-start gap-3">
+                  <span className="flex items-center justify-center w-6 h-6 bg-white/20 rounded-full text-xs font-bold">1</span>
+                  <span>选择AI模型配置模板，或手动填写API信息</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="flex items-center justify-center w-6 h-6 bg-white/20 rounded-full text-xs font-bold">2</span>
+                  <span>输入您的API密钥并保存配置</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="flex items-center justify-center w-6 h-6 bg-white/20 rounded-full text-xs font-bold">3</span>
+                  <span>根据需要配置代理、并发和反检测设置</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="flex items-center justify-center w-6 h-6 bg-white/20 rounded-full text-xs font-bold">4</span>
+                  <span>返回主页开始分析网站内容</span>
+                </li>
+              </ol>
             </div>
           </CardContent>
         </Card>

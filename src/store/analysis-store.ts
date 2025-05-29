@@ -69,7 +69,7 @@ export interface AnalysisResult {
   reason: string
   companyInfo?: CompanyInfo
   emails?: EmailInfo[]
-  status: 'waiting' | 'crawling' | 'analyzing' | 'info-crawling' | 'completed' | 'failed'
+  status: 'waiting' | 'crawling' | 'analyzing' | 'info-crawling' | 'completed' | 'failed' | 'crawl-failed' | 'analysis-failed' | 'info-crawl-failed'
   crawledContent?: {
     title?: string
     description?: string

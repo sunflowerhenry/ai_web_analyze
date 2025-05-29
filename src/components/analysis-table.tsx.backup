@@ -61,9 +61,8 @@ export function AnalysisTable() {
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterResult, setFilterResult] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
-  // 移除排序功能 - 注释掉 sortBy 和 sortOrder 相关状态
-  // const [sortBy, setSortBy] = useState<string>('createdAt')
-  // const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [sortBy, setSortBy] = useState<string>('createdAt')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
@@ -75,7 +74,7 @@ export function AnalysisTable() {
     stopRequestedRef.current = isStopRequested
   }, [isStopRequested])
 
-  // 筛选后的数据 - 移除排序功能
+  // 筛选和排序后的数据
   const filteredAndSortedData = useMemo(() => {
     let filtered = analysisData
     
@@ -98,14 +97,35 @@ export function AnalysisTable() {
       filtered = filtered.filter(item => item.result === filterResult)
     }
     
-    // 移除排序功能 - 保持原始顺序
+    // 排序
+    filtered.sort((a, b) => {
+      let aValue: any = a[sortBy as keyof AnalysisResult]
+      let bValue: any = b[sortBy as keyof AnalysisResult]
+      
+      if (sortBy === 'createdAt' || sortBy === 'updatedAt') {
+        aValue = new Date(aValue).getTime()
+        bValue = new Date(bValue).getTime()
+      }
+      
+      if (typeof aValue === 'string') {
+        aValue = aValue.toLowerCase()
+        bValue = bValue.toLowerCase()
+      }
+      
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : -1
+      } else {
+        return aValue < bValue ? 1 : -1
+      }
+    })
+    
     return filtered
-  }, [analysisData, filterStatus, filterResult, searchQuery])
+  }, [analysisData, filterStatus, filterResult, searchQuery, sortBy, sortOrder])
 
-  // 当筛选条件改变时重置页码到第一页 - 移除排序依赖
+  // 当排序或筛选条件改变时重置页码到第一页
   useEffect(() => {
     setCurrentPage(1)
-  }, [filterStatus, filterResult, searchQuery])
+  }, [filterStatus, filterResult, searchQuery, sortBy, sortOrder])
 
   // 分页数据
   const paginatedData = useMemo(() => {
@@ -117,11 +137,7 @@ export function AnalysisTable() {
 
   // 检查是否可以开始分析
   const canStartAnalysis = analysisData.some(item => 
-    item.status === 'waiting' || 
-    item.status === 'failed' || 
-    item.status === 'crawl-failed' || 
-    item.status === 'analysis-failed' || 
-    item.status === 'info-crawl-failed'
+    item.status === 'waiting' || item.status === 'failed'
   )
 
   // 检查是否可以一键爬取
@@ -138,9 +154,6 @@ export function AnalysisTable() {
       case 'info-crawling': return <Loader2 className="h-4 w-4 text-purple-500 animate-spin" />
       case 'completed': return <CheckCircle className="h-4 w-4 text-green-500" />
       case 'failed': return <XCircle className="h-4 w-4 text-red-500" />
-      case 'crawl-failed': return <XCircle className="h-4 w-4 text-red-500" />
-      case 'analysis-failed': return <XCircle className="h-4 w-4 text-orange-500" />
-      case 'info-crawl-failed': return <XCircle className="h-4 w-4 text-purple-500" />
       default: return <AlertCircle className="h-4 w-4 text-gray-500" />
     }
   }
@@ -320,11 +333,7 @@ export function AnalysisTable() {
     }
 
     const pendingItems = analysisData.filter(item => 
-      item.status === 'waiting' || 
-      item.status === 'failed' || 
-      item.status === 'crawl-failed' || 
-      item.status === 'analysis-failed' || 
-      item.status === 'info-crawl-failed'
+      item.status === 'waiting' || item.status === 'failed'
     )
 
     if (pendingItems.length === 0) {
@@ -391,7 +400,7 @@ export function AnalysisTable() {
             
             if (crawlResponse.data.error) {
               updateResult(item.id, { 
-                status: 'crawl-failed', 
+                status: 'failed', 
                 result: 'ERROR',
                 reason: crawlResponse.data.error,
                 error: crawlResponse.data.error
@@ -458,7 +467,7 @@ export function AnalysisTable() {
             }
 
             updateResult(item.id, {
-              status: 'analysis-failed',
+              status: 'failed',
               result: 'ERROR',
               reason: '分析过程中发生错误',
               error: error instanceof Error ? error.message : '未知错误'
@@ -563,7 +572,7 @@ export function AnalysisTable() {
       }
 
       updateResult(id, {
-        status: 'info-crawl-failed',
+        status: 'failed',
         error: error instanceof Error ? error.message : '爬取失败'
       })
       toast.error('信息爬取失败')
@@ -656,9 +665,6 @@ export function AnalysisTable() {
       case 'info-crawling': return '正在爬取信息'
       case 'completed': return '已完成'
       case 'failed': return '失败'
-      case 'crawl-failed': return '爬取失败'
-      case 'analysis-failed': return '分析失败'
-      case 'info-crawl-failed': return '信息爬取失败'
       default: return '未知'
     }
   }
@@ -778,12 +784,8 @@ export function AnalysisTable() {
                   <SelectItem value="waiting">等待分析</SelectItem>
                   <SelectItem value="crawling">正在爬取</SelectItem>
                   <SelectItem value="analyzing">正在分析</SelectItem>
-                  <SelectItem value="info-crawling">正在爬取信息</SelectItem>
                   <SelectItem value="completed">已完成</SelectItem>
                   <SelectItem value="failed">失败</SelectItem>
-                  <SelectItem value="crawl-failed">爬取失败</SelectItem>
-                  <SelectItem value="analysis-failed">分析失败</SelectItem>
-                  <SelectItem value="info-crawl-failed">信息爬取失败</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -814,6 +816,31 @@ export function AnalysisTable() {
                   重置
                 </Button>
               )}
+            </div>
+
+            <div className="flex items-center gap-1 border rounded-lg p-2 bg-gray-50">
+              <ArrowUpDown className="h-4 w-4 text-gray-500" />
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger className="w-28 h-8 border-0 bg-transparent">
+                  <SelectValue placeholder="排序" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="createdAt">创建时间</SelectItem>
+                  <SelectItem value="updatedAt">更新时间</SelectItem>
+                  <SelectItem value="url">网站地址</SelectItem>
+                  <SelectItem value="result">分析结果</SelectItem>
+                  <SelectItem value="status">状态</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                className="h-6 w-6 p-0"
+              >
+                {sortOrder === 'asc' ? '↑' : '↓'}
+              </Button>
             </div>
 
             {/* 表格设置 */}
@@ -1072,20 +1099,9 @@ export function AnalysisTable() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-start gap-2">
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(item.status)}
-                          <span className="text-sm">{getStatusText(item.status)}</span>
-                        </div>
-                        {/* 显示错误信息 */}
-                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && item.error && (
-                          <div className="mt-1">
-                            <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
-                              <div className="font-medium mb-1">错误详情:</div>
-                              <div className="break-words">{item.error}</div>
-                            </div>
-                          </div>
-                        )}
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(item.status)}
+                        <span className="text-sm">{getStatusText(item.status)}</span>
                       </div>
                     </TableCell>
                     <TableCell>
