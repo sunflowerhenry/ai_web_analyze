@@ -1,107 +1,155 @@
-# Next.js 初始化模板
+# AI 网站内容分析系统
 
-一个简洁的 Next.js 初始化模板，适合快速开始新项目或学习现代前端开发。
+一个基于 Next.js 和 AI 技术的智能网站内容分析工具，支持批量爬取网站内容并通过 AI 进行客户分析。
+
+## ✨ 主要功能
+
+### 🕷️ 智能网站爬取
+- **批量链接处理**: 支持批量输入网站链接或上传文件
+- **多页面爬取**: 自动发现并爬取主页、关于我们、联系我们等相关页面
+- **智能内容提取**: 自动提取网站标题、描述、主要内容
+- **公司信息识别**: 智能识别并提取公司名称、品牌信息
+- **邮箱收集**: 自动收集页面中的邮箱地址并记录来源页面
+
+### 🤖 AI 智能分析
+- **多AI服务支持**: 兼容 OpenAI、DeepSeek、Claude 等多种 AI 服务
+- **客户判断**: 智能判断网站是否为目标客户
+- **详细分析**: 提供详细的判断依据和分析理由
+- **自定义提示词**: 支持自定义 AI 分析提示词模板
+
+### 📊 数据管理与导出
+- **实时状态显示**: 爬取中、分析中、已完成等状态实时更新
+- **批量操作**: 支持批量选择、删除、重新分析
+- **多格式导出**: 支持 Excel、CSV、JSON 格式导出
+- **数据复制**: 一键复制表格数据到剪贴板
+- **本地存储**: 数据自动保存到本地，刷新页面不丢失
+
+### 🎯 分析结果展示
+- **网站链接**: 可点击访问的原始链接
+- **判断结果**: 是/否的明确判断结果
+- **判断依据**: 可展开查看详细分析依据
+- **网站公司名称**: 自动提取的公司或品牌名称
+- **邮箱信息**: 收集到的邮箱地址及来源页面
+- **分析状态**: 实时显示处理进度
 
 ## 🚀 快速开始
 
+### 环境要求
+- Node.js 18+ 
+- npm 或 yarn
+
 ### 安装依赖
 ```bash
-npm i
+npm install
 ```
-
-> 强烈推荐安装 `Biome` 插件，提早规避 Bug
-> 可在 cursor 左上角的插件市场中搜索并安装
 
 ### 启动开发服务器
 ```bash
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000) 查看结果。
+打开 [http://localhost:3000](http://localhost:3000) 开始使用。
 
-### 线上部署
-
-#### 使用 Vercel 一键部署
-
-Vercel 是 Next.js 官方推荐的零配置部署平台，非常适合静态和 SSR 应用。
-
-**完整步骤如下：**
-
-##### 第一步：准备 GitHub 仓库
-
-1. **注册 GitHub 账号**
-   - 前往 [https://github.com/](https://github.com/) 
-   - 点击 "Sign up" 注册新账号
-   - 填写用户名、邮箱、密码并验证
-
-2. **创建新仓库**
-   - 登录后点击右上角的 "+" 按钮
-   - 选择 "New repository"
-   - 仓库名称填写：`my-nextjs-app`（可自定义）
-   - 设置为 Public（公开）
-   - 点击 "Create repository"
-
-3. **上传项目代码**
-   ```bash
-   # 在项目根目录执行
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/你的用户名/my-nextjs-app.git
-   git push -u origin main
-   ```
-
-##### 第二步：部署到 Vercel
-
-1. **注册登录 Vercel**
-   - 前往 [https://vercel.com/](https://vercel.com/) 
-   - 点击 "Sign up" 并选择 "Continue with GitHub"
-   - 授权 Vercel 访问你的 GitHub 账号
-
-2. **导入项目**
-   - 登录后点击 "New Project"
-   - 选择刚才创建的 GitHub 仓库
-   - 点击 "Import"
-
-3. **配置部署**
-   - Framework Preset：自动检测为 "Next.js"
-   - Build Command：`npm run build`（通常自动填写）
-   - Output Directory：`.next`（通常自动填写）
-   - Install Command：`npm install`（通常自动填写）
-
-4. **开始部署**
-   - 点击 "Deploy" 按钮
-   - 等待 2-3 分钟完成构建
-   - 部署成功后会得到一个免费的 `.vercel.app` 域名
-
-##### 第三步：后续更新
-
-以后每次修改代码并推送到 GitHub，Vercel 会自动重新部署：
-
+### 生产环境构建
 ```bash
-git add .
-git commit -m "更新说明"
-git push
+npm run build
+npm start
 ```
 
-#### 其他部署选项
+## 🔧 配置说明
 
-##### Netlify（备选方案）
-1. 前往 [https://netlify.com/](https://netlify.com/)
-2. 注册并连接 GitHub
-3. 选择仓库并部署
-4. 构建命令：`npm run build`
-5. 发布目录：`out`
+### AI 服务配置
+1. 点击页面右上角的"配置管理"
+2. 选择或自定义 AI 服务：
+   - **OpenAI**: 使用 GPT 模型
+   - **DeepSeek**: 使用 DeepSeek 模型
+   - **OpenRouter**: 访问多种开源模型
+   - **自定义**: 配置其他兼容 OpenAI API 的服务
 
-##### 本地构建测试
-```bash
-npm run build      # 构建生产版本
-npm start         # 启动生产服务器
+### 必填配置项
+- **模型名称**: 如 `gpt-3.5-turbo`、`deepseek-chat`
+- **API 地址**: AI 服务的 API 端点
+- **API 密钥**: 您的 API 密钥
+- **提示词模板**: 自定义分析提示词
+
+### 配置管理
+- **保存配置**: 将当前配置保存到本地
+- **加载配置**: 快速加载已保存的配置
+- **删除配置**: 删除不需要的配置
+- **预设模板**: 使用内置的快速配置模板
+
+## 📝 使用指南
+
+### 1. 添加网站链接
+- **手动输入**: 在文本框中每行输入一个网站链接
+- **文件上传**: 上传包含链接的 .txt 或 .csv 文件
+- **支持格式**: 
+  - `example.com`
+  - `https://example.com`
+  - `www.example.com`
+
+### 2. 开始分析
+1. 确保已配置 AI 服务
+2. 点击"开始分析"按钮
+3. 系统将自动：
+   - 爬取网站内容
+   - 提取公司信息和邮箱
+   - 调用 AI 进行分析
+   - 显示分析结果
+
+### 3. 查看结果
+- **判断依据**: 点击箭头图标展开查看完整分析
+- **邮箱信息**: 查看收集到的邮箱及来源页面
+- **公司信息**: 查看自动提取的公司名称
+
+### 4. 数据操作
+- **批量选择**: 使用复选框选择多个项目
+- **重新分析**: 对失败或需要重新分析的项目
+- **删除项目**: 删除不需要的分析结果
+- **导出数据**: 选择格式导出分析结果
+
+## 🛠️ 技术栈
+
+- **前端框架**: Next.js 15 + React 19
+- **UI 组件**: shadcn/ui + Tailwind CSS
+- **状态管理**: Zustand (持久化存储)
+- **网页爬取**: Cheerio + Axios
+- **数据导出**: XLSX
+- **表单处理**: React Hook Form + Zod
+- **通知系统**: Sonner
+- **图标**: Lucide React
+
+## 📁 项目结构
+
+```
+src/
+├── app/                    # Next.js App Router
+│   ├── api/               # API 路由
+│   │   ├── crawl/         # 网站爬取 API
+│   │   ├── analyze/       # AI 分析 API
+│   │   └── export/        # 数据导出 API
+│   ├── config/            # 配置页面
+│   ├── layout.tsx         # 根布局
+│   └── page.tsx           # 主页面
+├── components/            # React 组件
+│   ├── ui/               # shadcn/ui 组件
+│   ├── analysis-table.tsx # 分析结果表格
+│   └── url-input.tsx     # URL 输入组件
+├── store/                # Zustand 状态管理
+│   └── analysis-store.ts # 分析数据存储
+└── lib/                  # 工具函数
 ```
 
-**🎉 恭喜！** 你的 Next.js 应用现在已经上线了！
+## 🔒 隐私与安全
 
+- **本地存储**: API 密钥仅保存在浏览器本地，不会上传到服务器
+- **数据安全**: 所有分析数据保存在本地，可随时清除
+- **请求频率**: 内置请求频率控制，避免对目标网站造成压力
+- **错误处理**: 完善的错误处理机制，确保系统稳定运行
+
+## 🤝 贡献指南
+
+欢迎提交 Issue 和 Pull Request 来改进这个项目！
 
 ## 📄 许可证
 
@@ -109,4 +157,4 @@ MIT License - 可自由使用和修改。
 
 ---
 
-**开始你的 Next.js 之旅吧！** 🎉
+**开始您的智能网站分析之旅！** 🚀
