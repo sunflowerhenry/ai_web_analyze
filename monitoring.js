@@ -5,8 +5,8 @@
  * 用于监控Next.js应用的内存使用、性能状态等
  */
 
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
 class SystemMonitor {
   constructor() {
@@ -30,15 +30,23 @@ class SystemMonitor {
   }
 
   // 格式化字节大小
+  /**
+   * @param {number} bytes 
+   * @returns {string}
+   */
   formatBytes(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return Number.parseFloat((bytes / (k ** i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   // 检查内存警告
+  /**
+   * @param {ReturnType<SystemMonitor['getMemoryUsage']>} usage 
+   * @returns {string[]}
+   */
   checkMemoryAlerts(usage) {
     const alerts = [];
     
@@ -54,6 +62,9 @@ class SystemMonitor {
   }
 
   // 记录监控信息
+  /**
+   * @param {string} message 
+   */
   logInfo(message) {
     const timestamp = new Date().toISOString();
     const logEntry = `[${timestamp}] ${message}\n`;
@@ -64,7 +75,7 @@ class SystemMonitor {
     try {
       fs.appendFileSync(this.logFile, logEntry);
     } catch (error) {
-      console.error('写入日志失败:', error.message);
+      console.error('写入日志失败:', error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -148,7 +159,7 @@ if (require.main === module) {
   // 解析命令行参数
   const args = process.argv.slice(2);
   const intervalArg = args.find(arg => arg.startsWith('--interval='));
-  const interval = intervalArg ? parseInt(intervalArg.split('=')[1]) : 10;
+  const interval = intervalArg ? Number.parseInt(intervalArg.split('=')[1] || '10', 10) : 10;
   
   if (args.includes('--once')) {
     // 只执行一次检查
