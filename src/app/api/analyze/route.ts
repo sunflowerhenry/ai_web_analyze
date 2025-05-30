@@ -175,15 +175,39 @@ export async function POST(request: NextRequest) {
     
     // 验证必要参数
     if (!config.apiKey) {
-      return NextResponse.json({ error: 'API密钥未配置' }, { status: 400 })
+      return NextResponse.json({ 
+        error: 'API密钥未配置',
+        errorDetails: {
+          type: 'config_error',
+          stage: 'ai_analysis',
+          message: 'AI API密钥未设置，请先配置',
+          retryable: false
+        }
+      }, { status: 400 })
     }
     
     if (!config.apiUrl) {
-      return NextResponse.json({ error: 'API地址未配置' }, { status: 400 })
+      return NextResponse.json({ 
+        error: 'API地址未配置',
+        errorDetails: {
+          type: 'config_error',
+          stage: 'ai_analysis',
+          message: 'AI API地址未设置，请先配置',
+          retryable: false
+        }
+      }, { status: 400 })
     }
     
     if (!crawledContent || !crawledContent.content) {
-      return NextResponse.json({ error: '没有可分析的内容' }, { status: 400 })
+      return NextResponse.json({ 
+        error: '没有可分析的内容',
+        errorDetails: {
+          type: 'config_error',
+          stage: 'ai_analysis',
+          message: '爬取的网站内容为空，无法进行分析',
+          retryable: false
+        }
+      }, { status: 400 })
     }
     
     // 构建分析提示词
@@ -191,24 +215,64 @@ export async function POST(request: NextRequest) {
     
     let result: AnalysisResult
     
-    // 根据API地址判断使用哪种AI服务
-    if (config.apiUrl.includes('openai.com')) {
-      result = await callOpenAI(config, prompt)
-    } else {
-      result = await callGenericAI(config, prompt)
+    try {
+      // 根据API地址判断使用哪种AI服务
+      if (config.apiUrl.includes('openai.com')) {
+        result = await callOpenAI(config, prompt)
+      } else {
+        result = await callGenericAI(config, prompt)
+      }
+      
+      return NextResponse.json(result)
+      
+    } catch (error) {
+      // 根据错误类型返回详细的错误信息
+      if (error instanceof Error) {
+        let errorType: 'ai_error' | 'network_error' | 'timeout_error' | 'config_error' = 'ai_error'
+        let retryable = true
+        
+        if (error.message.includes('API密钥无效') || error.message.includes('401')) {
+          errorType = 'config_error'
+          retryable = false
+        } else if (error.message.includes('超时') || error.message.includes('timeout')) {
+          errorType = 'timeout_error'
+          retryable = true
+        } else if (error.message.includes('网络') || error.message.includes('连接')) {
+          errorType = 'network_error'
+          retryable = true
+        }
+        
+        return NextResponse.json({
+          error: error.message,
+          errorDetails: {
+            type: errorType,
+            stage: 'ai_analysis',
+            message: error.message,
+            retryable
+          }
+        }, { status: 500 })
+      }
+      
+      return NextResponse.json({
+        error: 'AI分析失败',
+        errorDetails: {
+          type: 'ai_error',
+          stage: 'ai_analysis',
+          message: '未知的AI分析错误',
+          retryable: true
+        }
+      }, { status: 500 })
     }
     
-    return NextResponse.json(result)
-    
   } catch (error) {
-    console.error('分析API错误:', error)
-    return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : '分析失败',
-        result: 'ERROR' as const,
-        reason: '系统错误'
-      },
-      { status: 500 }
-    )
+    return NextResponse.json({
+      error: `请求处理失败: ${error instanceof Error ? error.message : '未知错误'}`,
+      errorDetails: {
+        type: 'unknown_error',
+        stage: 'ai_analysis',
+        message: error instanceof Error ? error.message : '请求处理失败',
+        retryable: false
+      }
+    }, { status: 500 })
   }
 } 

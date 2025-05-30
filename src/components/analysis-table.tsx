@@ -647,8 +647,8 @@ export function AnalysisTable() {
     }
   }
 
-  // 获取状态文本
-  const getStatusText = (status: string): string => {
+  // 状态文本映射
+  const getStatusText = (status: string) => {
     switch (status) {
       case 'waiting': return '等待分析'
       case 'crawling': return '正在爬取'
@@ -657,9 +657,22 @@ export function AnalysisTable() {
       case 'completed': return '已完成'
       case 'failed': return '失败'
       case 'crawl-failed': return '爬取失败'
-      case 'analysis-failed': return '分析失败'
+      case 'analysis-failed': return 'AI分析失败'
       case 'info-crawl-failed': return '信息爬取失败'
-      default: return '未知'
+      default: return '未知状态'
+    }
+  }
+
+  // 错误类型文本映射
+  const getErrorTypeText = (errorType?: string) => {
+    switch (errorType) {
+      case 'crawl_error': return '网站爬取错误'
+      case 'ai_error': return 'AI分析错误'
+      case 'network_error': return '网络连接错误'
+      case 'timeout_error': return '请求超时错误'
+      case 'config_error': return '配置错误'
+      case 'unknown_error': return '未知错误'
+      default: return '错误'
     }
   }
 
@@ -1072,16 +1085,49 @@ export function AnalysisTable() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-start gap-2">
+                      <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-2">
                           {getStatusIcon(item.status)}
                           <span className="text-sm">{getStatusText(item.status)}</span>
                         </div>
-                        {/* 显示错误信息 */}
-                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && item.error && (
+                        
+                        {/* 显示详细错误信息 */}
+                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && item.errorDetails && (
+                          <div className="mt-1">
+                            <div className="text-xs bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-medium text-red-800">
+                                  {getErrorTypeText(item.errorDetails.type)}
+                                </span>
+                                <Badge 
+                                  variant={item.errorDetails.retryable ? "secondary" : "destructive"} 
+                                  className="text-xs px-1 py-0"
+                                >
+                                  {item.errorDetails.retryable ? '可重试' : '不可重试'}
+                                </Badge>
+                              </div>
+                              <div className="text-red-600 break-words">
+                                阶段: {item.errorDetails.stage === 'crawling' ? '网站爬取' : 
+                                      item.errorDetails.stage === 'ai_analysis' ? 'AI分析' : 
+                                      item.errorDetails.stage === 'info_extraction' ? '信息提取' : '初始化'}
+                              </div>
+                              <div className="text-red-600 break-words mt-1">
+                                {item.errorDetails.message}
+                              </div>
+                              {item.errorDetails.statusCode && (
+                                <div className="text-red-500 text-xs mt-1">
+                                  状态码: {item.errorDetails.statusCode}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* 兼容旧的错误显示 */}
+                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && !item.errorDetails && item.error && (
                           <div className="mt-1">
                             <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
-                              <div className="font-medium mb-1">错误详情:</div>
+                              <div className="font-medium mb-1">错误信息:</div>
                               <div className="break-words">{item.error}</div>
                             </div>
                           </div>

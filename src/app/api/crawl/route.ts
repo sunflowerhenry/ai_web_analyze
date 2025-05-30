@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
 import axios from 'axios'
 import * as cheerio from 'cheerio'
 
@@ -13,6 +14,13 @@ interface CrawlResult {
   }>
   companyName?: string
   error?: string
+  errorDetails?: {
+    type: 'crawl_error' | 'network_error' | 'timeout_error' | 'config_error'
+    stage: 'crawling' | 'initialization'
+    message: string
+    statusCode?: number
+    retryable: boolean
+  }
 }
 
 // 目标页面类型识别关键词
@@ -98,8 +106,6 @@ function getPageType(url: string): 'home' | 'about' | 'contact' | 'other' {
   return 'other'
 }
 
-
-
 // 提取公司名称
 function extractCompanyName($: cheerio.CheerioAPI): string {
   // 尝试从多个位置提取公司名称
@@ -156,6 +162,19 @@ async function crawlPage(url: string): Promise<{ title: string; content: string;
     
     return { title, content, description, companyName }
   } catch (error) {
+    if (axios.isAxiosError(error)) {
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('爬取超时，网站响应过慢')
+      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        throw new Error('无法连接到目标网站，请检查URL')
+      } else if (error.response?.status === 403) {
+        throw new Error('网站拒绝访问，可能存在反爬虫保护')
+      } else if (error.response?.status === 404) {
+        throw new Error('页面不存在')
+      } else if (error.response && error.response.status >= 500) {
+        throw new Error('目标服务器错误')
+      }
+    }
     throw new Error(`爬取页面失败: ${error instanceof Error ? error.message : '未知错误'}`)
   }
 }
@@ -165,7 +184,15 @@ export async function POST(request: NextRequest) {
     const { url } = await request.json()
     
     if (!url) {
-      return NextResponse.json({ error: '缺少URL参数' }, { status: 400 })
+      return NextResponse.json({ 
+        error: '缺少URL参数',
+        errorDetails: {
+          type: 'config_error',
+          stage: 'initialization',
+          message: '请求中缺少必要的URL参数',
+          retryable: false
+        }
+      }, { status: 400 })
     }
     
     // 验证URL格式
@@ -174,7 +201,15 @@ export async function POST(request: NextRequest) {
       const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`)
       targetUrl = urlObj.toString()
     } catch (error) {
-      return NextResponse.json({ error: '无效的URL格式' }, { status: 400 })
+      return NextResponse.json({ 
+        error: '无效的URL格式',
+        errorDetails: {
+          type: 'config_error',
+          stage: 'initialization',
+          message: `URL格式不正确: ${url}`,
+          retryable: false
+        }
+      }, { status: 400 })
     }
     
     const result: CrawlResult = {}
@@ -214,8 +249,6 @@ export async function POST(request: NextRequest) {
             content: pageData.content
           })
           
-
-          
           // 如果主页没有公司名称，尝试从其他页面获取
           if (!result.companyName && pageData.companyName) {
             result.companyName = pageData.companyName
@@ -229,8 +262,6 @@ export async function POST(request: NextRequest) {
       if (pages.length > 0) {
         result.pages = pages
       }
-      
-
       
     } catch (error) {
       result.error = error instanceof Error ? error.message : '爬取失败'
