@@ -344,13 +344,16 @@ const runningTasks = new Map<string, {
 // 内存管理配置
 const MEMORY_CONFIG = {
   MAX_TASKS: 50,              // 最大任务数量
-  MAX_RESULTS_PER_TASK: 1000,  // 增加每个任务最大结果数，支持大批量
-  MAX_ERRORS_PER_TASK: 500,   // 增加每个任务最大错误数
-  CLEANUP_INTERVAL: 5 * 60 * 1000, // 5分钟清理一次，更频繁
-  TASK_RETENTION_TIME: 7 * 24 * 60 * 60 * 1000, // 任务保留7天，支持长期查看结果
-  BATCH_SIZE: 50,             // 分批处理大小，每批50个URL
-  BATCH_DELAY: 500,           // 批次间延迟500ms，平衡速度和稳定性
-  MEMORY_CHECK_INTERVAL: 100, // 每100个URL检查一次内存
+  MAX_RESULTS_PER_TASK: 10000,  // 提升到10000个结果支持
+  MAX_ERRORS_PER_TASK: 5000,   // 提升到5000个错误支持
+  CLEANUP_INTERVAL: 2 * 60 * 1000, // 2分钟清理一次，更频繁
+  TASK_RETENTION_TIME: 7 * 24 * 60 * 60 * 1000, // 任务保留7天
+  BATCH_SIZE: 20,             // 减少批次大小到20，降低内存压力
+  BATCH_DELAY: 200,           // 减少批次间延迟到200ms，提高处理速度
+  MEMORY_CHECK_INTERVAL: 50,  // 每50个URL检查一次内存，更频繁
+  CONCURRENT_LIMIT_NORMAL: 8, // 普通情况下的并发限制
+  CONCURRENT_LIMIT_LARGE: 4,  // 大批量情况下的并发限制
+  LARGE_BATCH_THRESHOLD: 1000, // 大批量的阈值
 }
 
 // 内存使用检查
@@ -362,8 +365,9 @@ function checkMemoryUsage() {
   return {
     heapUsedMB,
     rssMB,
-    isHighMemory: heapUsedMB > 400 || rssMB > 500, // 400MB堆内存或500MB RSS
-    shouldCleanup: heapUsedMB > 300 || rssMB > 400  // 300MB堆内存或400MB RSS时开始清理
+    isHighMemory: heapUsedMB > 300 || rssMB > 400, // 降低阈值：300MB堆内存或400MB RSS
+    shouldCleanup: heapUsedMB > 200 || rssMB > 300, // 降低阈值：200MB堆内存或300MB RSS时开始清理
+    isCritical: heapUsedMB > 500 || rssMB > 600     // 新增严重状态，需要强制清理
   }
 }
 
@@ -464,9 +468,16 @@ async function processBackgroundTask(taskId: string) {
     
     const taskPromise = (async () => {
       const totalUrls = task.urls.length
-      const batchSize = task.urls.length > 1000 ? MEMORY_CONFIG.BATCH_SIZE : 10 // 大批量时使用更大的批次
+      let batchSize = MEMORY_CONFIG.BATCH_SIZE // 开始使用默认批次大小
       
-      console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 开始分批处理 ${totalUrls} 个URL，批次大小: ${batchSize}`)
+      // 根据任务规模动态调整批次大小
+      if (totalUrls > 5000) {
+        batchSize = Math.max(10, MEMORY_CONFIG.BATCH_SIZE * 0.5) // 超大任务使用更小批次
+      } else if (totalUrls > MEMORY_CONFIG.LARGE_BATCH_THRESHOLD) {
+        batchSize = Math.max(15, MEMORY_CONFIG.BATCH_SIZE * 0.75) // 大任务适中批次
+      }
+      
+      console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 开始分批处理 ${totalUrls} 个URL，初始批次大小: ${batchSize}`)
       
       for (let batchStart = 0; batchStart < totalUrls; batchStart += batchSize) {
         if (abortController.signal.aborted) break
@@ -481,14 +492,22 @@ async function processBackgroundTask(taskId: string) {
           const memoryStatus = checkMemoryUsage()
           console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 内存检查: Heap=${memoryStatus.heapUsedMB.toFixed(1)}MB, RSS=${memoryStatus.rssMB.toFixed(1)}MB`)
           
-          if (memoryStatus.shouldCleanup) {
+          if (memoryStatus.isCritical) {
+            console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 严重内存压力，强制清理并暂停`)
+            performMemoryCleanup()
+            // 强制垃圾回收（如果可用）
+            if (global.gc) {
+              global.gc()
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000)) // 暂停5秒
+          } else if (memoryStatus.shouldCleanup) {
             console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 触发内存清理`)
             performMemoryCleanup()
             
             // 如果内存使用过高，增加延迟
             if (memoryStatus.isHighMemory) {
-              console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 高内存使用，暂停3秒`)
-              await new Promise(resolve => setTimeout(resolve, 3000))
+              console.log(`[BackgroundTask ${taskId.substring(0, 8)}] 高内存使用，暂停2秒`)
+              await new Promise(resolve => setTimeout(resolve, 2000))
             }
           }
         }
@@ -504,10 +523,13 @@ async function processBackgroundTask(taskId: string) {
             // 更新进度和当前处理状态
             task.progress = { current: globalIndex + 1, total: totalUrls }
             
-            // 限制并发数量，避免同时处理太多
-            const concurrentLimit = task.urls.length > 5000 ? 3 : 5
+            // 使用新的并发限制配置
+            const concurrentLimit = task.urls.length > MEMORY_CONFIG.LARGE_BATCH_THRESHOLD 
+              ? MEMORY_CONFIG.CONCURRENT_LIMIT_LARGE 
+              : MEMORY_CONFIG.CONCURRENT_LIMIT_NORMAL
+            
             if (index >= concurrentLimit) {
-              await new Promise(resolve => setTimeout(resolve, index * 200)) // 交错延迟
+              await new Promise(resolve => setTimeout(resolve, index * 100)) // 减少交错延迟
             }
             
             task.currentlyProcessing = task.currentlyProcessing || []
@@ -525,8 +547,8 @@ async function processBackgroundTask(taskId: string) {
                 crawlData: {
                   title: crawlData.title,
                   description: crawlData.description,
-                  // 限制内容长度，避免内存过载
-                  content: crawlData.content, // 保留完整内容供AI分析
+                  // 优化内容存储，只保留必要信息
+                  content: crawlData.content?.substring(0, 2000), // 限制到2000字符
                   url: crawlData.url
                 },
                 analyzeData,
@@ -538,7 +560,7 @@ async function processBackgroundTask(taskId: string) {
                 crawlData: {
                   title: crawlData.title,
                   description: crawlData.description,
-                  content: crawlData.content, // 保留完整内容供AI分析
+                  content: crawlData.content?.substring(0, 2000), // 限制到2000字符
                   url: crawlData.url
                 },
                 completedAt: new Date()
@@ -585,9 +607,23 @@ async function processBackgroundTask(taskId: string) {
         // 等待当前批次完成
         await Promise.allSettled(batchPromises)
         
-        // 批次间延迟，避免过于频繁的请求
+        // 批次间延迟，根据批次大小和内存状态调整
         if (batchEnd < totalUrls) {
-          const delay = task.urls.length > 5000 ? MEMORY_CONFIG.BATCH_DELAY * 2 : MEMORY_CONFIG.BATCH_DELAY
+          const memoryStatus = checkMemoryUsage()
+          let delay = MEMORY_CONFIG.BATCH_DELAY
+          
+          // 根据任务大小调整延迟
+          if (task.urls.length > MEMORY_CONFIG.LARGE_BATCH_THRESHOLD) {
+            delay = MEMORY_CONFIG.BATCH_DELAY * 2
+          }
+          
+          // 根据内存状态调整延迟
+          if (memoryStatus.isHighMemory) {
+            delay = delay * 3
+          } else if (memoryStatus.shouldCleanup) {
+            delay = delay * 2
+          }
+          
           await new Promise(resolve => setTimeout(resolve, delay))
         }
         

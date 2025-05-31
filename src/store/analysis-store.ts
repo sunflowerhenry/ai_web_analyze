@@ -273,11 +273,13 @@ export const useAnalysisStore = create<AnalysisState>()(
               updatedAt: new Date()
             }))
           
-          // 自动清理：如果数据太多，保留最新的1000条
+          // 自动清理：如果数据太多，保留最新的10000条（提升限制）
           const allData = [...state.analysisData, ...newResults]
-          const limitedData = allData.length > 1000 
-            ? allData.slice(-1000) 
+          const limitedData = allData.length > 10000 
+            ? allData.slice(-10000) 
             : allData
+          
+          console.log(`[Store] 添加了 ${newResults.length} 个新URL，总数: ${limitedData.length}`)
           
           return {
             analysisData: limitedData
@@ -286,6 +288,13 @@ export const useAnalysisStore = create<AnalysisState>()(
       
       updateResult: (id, result) =>
         set((state) => {
+          // 找到要更新的项目
+          const itemIndex = state.analysisData.findIndex(item => item.id === id)
+          if (itemIndex === -1) {
+            console.warn(`[Store] 尝试更新不存在的项目: ${id}`)
+            return state // 如果找不到项目，不做任何更改
+          }
+          
           // 优化crawledContent存储，只保留必要信息
           const optimizedResult = { ...result }
           if (result.crawledContent) {
@@ -293,18 +302,23 @@ export const useAnalysisStore = create<AnalysisState>()(
               title: result.crawledContent.title,
               description: result.crawledContent.description,
               // 限制content长度，避免存储过大
-              content: result.crawledContent.content?.substring(0, 1000),
+              content: result.crawledContent.content?.substring(0, 1500), // 限制到1500字符
               // 不存储页面数组，太占空间
               pages: undefined
             }
           }
           
+          // 创建新的数组，确保不可变性
+          const newAnalysisData = [...state.analysisData]
+          const existingItem = newAnalysisData[itemIndex]
+          newAnalysisData[itemIndex] = { 
+            ...existingItem, 
+            ...optimizedResult, 
+            updatedAt: new Date() 
+          } as AnalysisResult
+          
           return {
-            analysisData: state.analysisData.map(item =>
-              item.id === id
-                ? { ...item, ...optimizedResult, updatedAt: new Date() }
-                : item
-            )
+            analysisData: newAnalysisData
           }
         }),
       
@@ -444,8 +458,8 @@ export const useAnalysisStore = create<AnalysisState>()(
       name: 'analysis-store',
       partialize: (state) => ({
         config: state.config,
-        // 只保存最新的500条分析数据，防止localStorage过大
-        analysisData: state.analysisData.slice(-500),
+        // 只保存最新的10000条分析数据，防止localStorage过大
+        analysisData: state.analysisData.slice(-10000),
         // 只保存最新的5个后台任务
         backgroundTasks: state.backgroundTasks.slice(-5)
       }),
@@ -473,9 +487,9 @@ export const useAnalysisStore = create<AnalysisState>()(
         
         if (version < 2) {
           // 清理旧版本的大数据
-          if (persistedState.analysisData && persistedState.analysisData.length > 500) {
+          if (persistedState.analysisData && persistedState.analysisData.length > 10000) {
             console.log('Migration: 清理过多的分析数据')
-            persistedState.analysisData = persistedState.analysisData.slice(-500)
+            persistedState.analysisData = persistedState.analysisData.slice(-10000)
           }
           
           if (persistedState.backgroundTasks && persistedState.backgroundTasks.length > 5) {

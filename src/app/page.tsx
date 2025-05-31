@@ -24,6 +24,24 @@ export default function HomePage() {
 		responseTime?: number
 	}>({ status: null })
 
+	// 新增：后台任务恢复状态
+	const [isCheckingBackgroundTasks, setIsCheckingBackgroundTasks] = useState(false)
+	const [resumedTasksProgress, setResumedTasksProgress] = useState<{
+		[taskId: string]: {
+			current: number
+			total: number
+			status: string
+		}
+	}>({})
+
+	// 新增：客户端渲染状态
+	const [isClient, setIsClient] = useState(false)
+
+	// 确保只在客户端执行
+	useEffect(() => {
+		setIsClient(true)
+	}, [])
+
 	// 恢复的任务监控
 	const startResumedTaskMonitoring = (taskId: string) => {
 		const monitorInterval = setInterval(async () => {
@@ -68,72 +86,76 @@ export default function HomePage() {
 	const syncRealtimeStatus = async (statusData: any) => {
 		const { updateResult, analysisData, addUrls } = useAnalysisStore.getState()
 		
-		// 确保所有URL都已添加到分析数据中
-		const existingUrls = new Set(analysisData.map(item => item.url))
-		const allUrls = [
-			...statusData.recentResults?.map((r: any) => r.url) || [],
-			...statusData.recentErrors?.map((e: any) => e.url) || [],
-			...statusData.currentlyProcessing || []
-		]
-		
-		const newUrls = allUrls.filter(url => url && !existingUrls.has(url))
-		if (newUrls.length > 0) {
-			console.log('添加缺失的URL到分析数据:', newUrls)
-			addUrls(newUrls)
-		}
-		
-		// 等待状态更新
-		await new Promise(resolve => setTimeout(resolve, 100))
-		
-		// 获取最新的分析数据
-		const latestAnalysisData = useAnalysisStore.getState().analysisData
-		
-		// 更新正在处理的URL状态
-		if (statusData.currentlyProcessing && statusData.currentlyProcessing.length > 0) {
-			statusData.currentlyProcessing.forEach((url: string) => {
-				const existingItem = latestAnalysisData.find(item => item.url === url)
-				if (existingItem && existingItem.status === 'waiting') {
-					updateResult(existingItem.id, {
-						status: 'analyzing'
-					})
-				}
-			})
-		}
-		
-		// 更新最近完成的结果
-		if (statusData.recentResults && statusData.recentResults.length > 0) {
-			statusData.recentResults.forEach((result: any) => {
-				const existingItem = latestAnalysisData.find(item => item.url === result.url)
-				if (existingItem) {
-					updateResult(existingItem.id, {
-						result: result.analyzeData?.result || 'PENDING',
-						reason: result.analyzeData?.reason || '',
-						status: 'completed',
-						crawledContent: result.crawlData
-					})
-				}
-			})
-		}
-		
-		// 更新最近的错误
-		if (statusData.recentErrors && statusData.recentErrors.length > 0) {
-			statusData.recentErrors.forEach((error: any) => {
-				const existingItem = latestAnalysisData.find(item => item.url === error.url)
-				if (existingItem) {
-					updateResult(existingItem.id, {
-						result: 'ERROR',
-						reason: error.message,
-						status: 'failed',
-						error: error.message,
-						errorDetails: {
-							type: error.type || 'unknown_error',
-							stage: error.stage || 'crawling',
-							message: error.message,
-							retryable: true
-						}
-					})
-				}
-			})
+		try {
+			// 确保所有URL都已添加到分析数据中
+			const existingUrls = new Set(analysisData.map(item => item.url))
+			const allUrls = [
+				...statusData.recentResults?.map((r: any) => r.url) || [],
+				...statusData.recentErrors?.map((e: any) => e.url) || [],
+				...statusData.currentlyProcessing || []
+			]
+			
+			const newUrls = allUrls.filter(url => url && !existingUrls.has(url))
+			if (newUrls.length > 0) {
+				console.log('添加缺失的URL到分析数据:', newUrls)
+				addUrls(newUrls)
+			}
+			
+			// 等待状态更新
+			await new Promise(resolve => setTimeout(resolve, 100))
+			
+			// 获取最新的分析数据
+			const latestAnalysisData = useAnalysisStore.getState().analysisData
+			
+			// 更新正在处理的URL状态
+			if (statusData.currentlyProcessing && statusData.currentlyProcessing.length > 0) {
+				statusData.currentlyProcessing.forEach((url: string) => {
+					const existingItem = latestAnalysisData.find(item => item.url === url)
+					if (existingItem && existingItem.status === 'waiting') {
+						updateResult(existingItem.id, {
+							status: 'analyzing'
+						})
+					}
+				})
+			}
+			
+			// 更新最近完成的结果
+			if (statusData.recentResults && statusData.recentResults.length > 0) {
+				statusData.recentResults.forEach((result: any) => {
+					const existingItem = latestAnalysisData.find(item => item.url === result.url)
+					if (existingItem) {
+						updateResult(existingItem.id, {
+							result: result.analyzeData?.result || 'PENDING',
+							reason: result.analyzeData?.reason || '',
+							status: 'completed',
+							crawledContent: result.crawlData
+						})
+					}
+				})
+			}
+			
+			// 更新最近的错误
+			if (statusData.recentErrors && statusData.recentErrors.length > 0) {
+				statusData.recentErrors.forEach((error: any) => {
+					const existingItem = latestAnalysisData.find(item => item.url === error.url)
+					if (existingItem) {
+						updateResult(existingItem.id, {
+							result: 'ERROR',
+							reason: error.message,
+							status: 'failed',
+							error: error.message,
+							errorDetails: {
+								type: error.type || 'unknown_error',
+								stage: error.stage || 'crawling',
+								message: error.message,
+								retryable: true
+							}
+						})
+					}
+				})
+			}
+		} catch (error) {
+			console.error('同步实时状态失败:', error)
 		}
 	}
 
@@ -154,11 +176,45 @@ export default function HomePage() {
 		}
 	}, [])
 
+	// 强制刷新配置状态
+	const forceRefreshConfig = () => {
+		if (!isClient) return // 只在客户端执行
+		
+		try {
+			// 从localStorage重新读取
+			const storedData = localStorage.getItem('analysis-store')
+			if (storedData) {
+				const parsedData = JSON.parse(storedData)
+				if (parsedData.state?.config) {
+					setLocalConfig(parsedData.state.config)
+					console.log('Force refresh - loaded config:', parsedData.state.config)
+					
+					// 强制触发重新渲染
+					setTimeout(() => {
+						// 等一下再检查配置状态
+						const refreshedConfig = parsedData.state.config
+						console.log('After refresh - config check:', {
+							hasApiKey: !!refreshedConfig?.apiKey?.trim(),
+							hasApiUrl: !!refreshedConfig?.apiUrl?.trim(),
+							hasModel: !!refreshedConfig?.modelName?.trim(),
+							apiKey: refreshedConfig?.apiKey ? '***configured***' : 'empty',
+							apiUrl: refreshedConfig?.apiUrl,
+							modelName: refreshedConfig?.modelName
+						})
+					}, 100)
+				}
+			}
+		} catch (error) {
+			console.error('Force refresh config failed:', error)
+		}
+	}
+
 	// 页面加载时检查并恢复后台任务
 	useEffect(() => {
 		const checkBackgroundTasks = async () => {
 			if (backgroundTasks && backgroundTasks.length > 0) {
 				console.log('检查后台任务:', backgroundTasks)
+				setIsCheckingBackgroundTasks(true)
 				
 				for (const taskId of backgroundTasks) {
 					try {
@@ -176,10 +232,25 @@ export default function HomePage() {
 							const taskStatus = await response.json()
 							console.log(`任务 ${taskId} 状态:`, taskStatus)
 							
+							// 更新任务进度状态
+							setResumedTasksProgress(prev => ({
+								...prev,
+								[taskId]: {
+									current: taskStatus.progress?.current || 0,
+									total: taskStatus.progress?.total || 0,
+									status: taskStatus.status || 'unknown'
+								}
+							}))
+							
 							if (taskStatus.status === 'completed') {
 								// 同步已完成的任务结果
 								await syncBackgroundTaskResults(taskId)
 								removeBackgroundTask(taskId)
+								setResumedTasksProgress(prev => {
+									const updated = { ...prev }
+									delete updated[taskId]
+									return updated
+								})
 								toast.success(`后台任务 ${taskId.substring(0, 8)} 已完成`, {
 									description: `已同步 ${taskStatus.summary.completed} 个结果`
 								})
@@ -187,14 +258,20 @@ export default function HomePage() {
 								// 同步失败的任务结果
 								await syncBackgroundTaskResults(taskId)
 								removeBackgroundTask(taskId)
+								setResumedTasksProgress(prev => {
+									const updated = { ...prev }
+									delete updated[taskId]
+									return updated
+								})
 								toast.error(`后台任务 ${taskId.substring(0, 8)} 失败`)
 							} else if (taskStatus.status === 'running' || taskStatus.status === 'pending') {
 								// 首先同步当前状态
 								await syncRealtimeStatus(taskStatus)
 								
 								// 继续监控正在运行的任务
-								toast.info(`发现正在运行的后台任务 ${taskId.substring(0, 8)}`, {
-									description: `进度: ${taskStatus.progress.current}/${taskStatus.progress.total}`
+								toast.info('🔄 发现正在运行的后台任务', {
+									description: '任务 ' + taskId.substring(0, 8) + ' - 进度: ' + (taskStatus.progress?.current || 0) + '/' + (taskStatus.progress?.total || 0),
+									duration: 8000
 								})
 								
 								// 启动实时监控
@@ -209,8 +286,11 @@ export default function HomePage() {
 						console.error('检查后台任务失败:', error)
 					}
 				}
+				
+				setIsCheckingBackgroundTasks(false)
 			} else {
 				console.log('没有发现后台任务')
+				setIsCheckingBackgroundTasks(false)
 			}
 		}
 		
@@ -280,20 +360,72 @@ export default function HomePage() {
 		}
 	}
 
+	// 调试配置状态
+	const debugConfigStatus = async () => {
+		try {
+			// 检查当前配置状态
+			console.log('=== 配置调试信息 ===')
+			console.log('Zustand config:', config)
+			console.log('Local config:', localConfig)
+			console.log('Current config:', currentConfig)
+			
+			// 检查localStorage
+			const storedData = localStorage.getItem('analysis-store')
+			if (storedData) {
+				const parsedData = JSON.parse(storedData)
+				console.log('LocalStorage state:', parsedData.state)
+			}
+			
+			// 发送到调试接口
+			const debugResponse = await fetch('/api/debug-config', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ config: currentConfig })
+			})
+			
+			const debugResult = await debugResponse.json()
+			console.log('Debug API result:', debugResult)
+			
+			toast.success('配置调试信息已输出到控制台')
+		} catch (error) {
+			console.error('调试失败:', error)
+			toast.error('调试失败')
+		}
+	}
+
 	// 检查配置状态
 	const getConfigStatus = () => {
-		const hasApiKey = !!currentConfig?.apiKey?.trim()
-		const hasApiUrl = !!currentConfig?.apiUrl?.trim()
-		const hasModel = !!currentConfig?.modelName?.trim()
+		// 只在客户端渲染时读取localStorage
+		let latestConfig = currentConfig
+		if (isClient) {
+			try {
+				const storedData = localStorage.getItem('analysis-store')
+				if (storedData) {
+					const parsedData = JSON.parse(storedData)
+					if (parsedData.state?.config) {
+						latestConfig = parsedData.state.config
+					}
+				}
+			} catch (error) {
+				console.error('Error reading latest config:', error)
+			}
+		}
 		
-		console.log('HomePage: Config status check:', {
-			hasApiKey,
-			hasApiUrl,
-			hasModel,
-			apiKey: currentConfig?.apiKey ? '***' : 'empty',
-			apiUrl: currentConfig?.apiUrl,
-			modelName: currentConfig?.modelName
-		})
+		const hasApiKey = !!latestConfig?.apiKey?.trim()
+		const hasApiUrl = !!latestConfig?.apiUrl?.trim()
+		const hasModel = !!latestConfig?.modelName?.trim()
+		
+		// 只在客户端渲染时输出日志
+		if (isClient) {
+			console.log('HomePage: Config status check:', {
+				hasApiKey,
+				hasApiUrl,
+				hasModel,
+				apiKey: latestConfig?.apiKey ? '***configured***' : 'empty',
+				apiUrl: latestConfig?.apiUrl,
+				modelName: latestConfig?.modelName
+			})
+		}
 		
 		if (hasApiKey && hasApiUrl && hasModel) {
 			return { status: 'complete', text: '已配置', icon: CheckCircle, color: 'text-green-600' }
@@ -376,35 +508,107 @@ export default function HomePage() {
 											)}
 										</div>
 									)}
+
+									{/* 调试按钮 - 仅在部分配置或未配置时显示 */}
+									{configStatus.status !== 'complete' && (
+										<div className="flex items-center gap-2 mt-2">
+											<Button
+												size="sm"
+												variant="outline"
+												onClick={debugConfigStatus}
+												className="h-6 text-xs text-orange-600 border-orange-200"
+											>
+												🔍 调试配置
+											</Button>
+											<span className="text-xs text-orange-600">
+												点击查看配置状态详情
+											</span>
+										</div>
+									)}
 									
 									<div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
 										<span className="flex items-center gap-1">
-											<div className={`w-2 h-2 rounded-full ${currentConfig?.proxySettings?.enabled ? 'bg-green-500' : 'bg-gray-300'}`} />
-											代理: {currentConfig?.proxySettings?.enabled ? '启用' : '禁用'}
+											<div className={`w-2 h-2 rounded-full ${isClient && currentConfig?.proxySettings?.enabled ? 'bg-green-500' : 'bg-gray-300'}`} />
+											代理: {isClient && currentConfig?.proxySettings?.enabled ? '启用' : '禁用'}
 										</span>
 										<span className="flex items-center gap-1">
-											<div className={`w-2 h-2 rounded-full ${currentConfig?.concurrencySettings?.enabled ? 'bg-blue-500' : 'bg-gray-300'}`} />
-											并发: {currentConfig?.concurrencySettings?.enabled ? `${currentConfig?.concurrencySettings?.maxConcurrent}` : '禁用'}
+											<div className={`w-2 h-2 rounded-full ${isClient && currentConfig?.concurrencySettings?.enabled ? 'bg-blue-500' : 'bg-gray-300'}`} />
+											并发: {isClient && currentConfig?.concurrencySettings?.enabled ? `${currentConfig?.concurrencySettings?.maxConcurrent}` : '禁用'}
 										</span>
 										<span className="flex items-center gap-1">
-											<div className={`w-2 h-2 rounded-full ${currentConfig?.antiDetectionSettings?.enabled ? 'bg-purple-500' : 'bg-gray-300'}`} />
-											反检测: {currentConfig?.antiDetectionSettings?.enabled ? '启用' : '禁用'}
+											<div className={`w-2 h-2 rounded-full ${isClient && currentConfig?.antiDetectionSettings?.enabled ? 'bg-purple-500' : 'bg-gray-300'}`} />
+											反检测: {isClient && currentConfig?.antiDetectionSettings?.enabled ? '启用' : '禁用'}
 										</span>
 									</div>
 								</CardContent>
 							</Card>
 							
-							<a 
-								href="/config" 
-								className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
-							>
-								<Settings className="h-4 w-4" />
-								配置管理
-							</a>
+							<div className="flex items-center gap-2">
+								{isClient && (
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={forceRefreshConfig}
+										className="text-xs"
+									>
+										🔄 刷新配置
+									</Button>
+								)}
+								
+								<a 
+									href="/config" 
+									className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+								>
+									<Settings className="h-4 w-4" />
+									配置管理
+								</a>
+							</div>
 						</div>
 					</div>
 				</div>
 			</header>
+
+			{/* 后台任务恢复进度显示 */}
+			{isClient && (isCheckingBackgroundTasks || Object.keys(resumedTasksProgress).length > 0) && (
+				<div className="container mx-auto px-4 py-3">
+					<Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 shadow-sm">
+						<CardContent className="p-4">
+							{isCheckingBackgroundTasks ? (
+								<div className="flex items-center gap-3">
+									<div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600" />
+									<span className="text-blue-800 font-medium">正在检查后台任务状态...</span>
+								</div>
+							) : (
+								<div className="space-y-2">
+									<div className="flex items-center gap-3">
+										<CheckCircle className="h-5 w-5 text-green-600" />
+										<span className="font-medium text-green-800">后台任务恢复完成</span>
+									</div>
+									{Object.entries(resumedTasksProgress).length > 0 && (
+										<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+											{Object.entries(resumedTasksProgress).map(([taskId, progress]) => (
+												<div key={taskId} className="flex items-center justify-between p-3 bg-white/70 rounded-lg border border-blue-200">
+													<div className="flex items-center gap-2">
+														<div className="text-sm font-medium text-blue-900">
+															任务 {taskId.substring(0, 8)}
+														</div>
+														<Badge variant="secondary" className="text-xs">
+															{progress.status}
+														</Badge>
+													</div>
+													<div className="text-sm text-blue-700">
+														{progress.current}/{progress.total}
+													</div>
+												</div>
+											))}
+										</div>
+									)}
+								</div>
+							)}
+						</CardContent>
+					</Card>
+				</div>
+			)}
 
 			{/* Main Content */}
 			<main className="container mx-auto px-4 py-8">

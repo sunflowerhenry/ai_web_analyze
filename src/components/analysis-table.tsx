@@ -35,6 +35,7 @@ import { useAnalysisStore, type AnalysisResult } from '@/store/analysis-store'
 import { toast } from 'sonner'
 import axios from 'axios'
 import * as XLSX from 'xlsx'
+import { Progress } from '@/components/ui/progress'
 
 export function AnalysisTable() {
   const { 
@@ -57,6 +58,15 @@ export function AnalysisTable() {
   const stopRequestedRef = useRef(false)
   const [currentAnalysisControllers, setCurrentAnalysisControllers] = useState<AbortController[]>([])
   
+  // 新增：实时进度监控状态
+  const [analysisProgress, setAnalysisProgress] = useState({
+    current: 0,
+    total: 0,
+    isActive: false,
+    currentUrl: '',
+    stage: '' // 'crawling', 'analyzing', 'info-crawling'
+  })
+  
   // 筛选和排序状态
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterResult, setFilterResult] = useState<string>('all')
@@ -67,7 +77,7 @@ export function AnalysisTable() {
   
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize] = useState(100) // 固定为100，移除setPageSize
   const [showTableSettings, setShowTableSettings] = useState(false)
 
   // 同步停止状态到 ref
@@ -339,10 +349,21 @@ export function AnalysisTable() {
     stopRequestedRef.current = false  // 确保重置停止状态
     setProgress(0, pendingItems.length)
 
+    // 初始化进度监控
+    setAnalysisProgress({
+      current: 0,
+      total: pendingItems.length,
+      isActive: true,
+      currentUrl: '',
+      stage: 'preparing'
+    })
+
     try {
       // 检查是否启用并发
       const concurrency = config.concurrencySettings?.enabled ? 
         (config.concurrencySettings?.maxConcurrent || 3) : 1
+
+      let completed = 0
 
       // 分批处理
       for (let i = 0; i < pendingItems.length; i += concurrency) {
@@ -370,6 +391,13 @@ export function AnalysisTable() {
               return
             }
 
+            // 更新当前处理URL和阶段
+            setAnalysisProgress(prev => ({
+              ...prev,
+              currentUrl: item.url,
+              stage: 'crawling'
+            }))
+
             // 更新状态为爬取中
             updateResult(item.id, { status: 'crawling' })
 
@@ -396,6 +424,8 @@ export function AnalysisTable() {
                 reason: crawlResponse.data.error,
                 error: crawlResponse.data.error
               })
+              completed++
+              setAnalysisProgress(prev => ({ ...prev, current: completed }))
               return
             }
 
@@ -404,6 +434,12 @@ export function AnalysisTable() {
               updateResult(item.id, { status: 'waiting' })
               return
             }
+
+            // 更新阶段为分析中
+            setAnalysisProgress(prev => ({
+              ...prev,
+              stage: 'analyzing'
+            }))
 
             // 更新状态为分析中
             updateResult(item.id, { 
@@ -450,6 +486,9 @@ export function AnalysisTable() {
               hasInfoCrawled: false
             })
 
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
+
           } catch (error) {
             if (axios.isCancel(error) || stopRequestedRef.current) {
               updateResult(item.id, { status: 'waiting' })
@@ -463,6 +502,9 @@ export function AnalysisTable() {
               reason: '分析过程中发生错误',
               error: error instanceof Error ? error.message : '未知错误'
             })
+            
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
           }
         })
 
@@ -490,6 +532,15 @@ export function AnalysisTable() {
       setIsStopRequested(false)
       stopRequestedRef.current = false
       setCurrentAnalysisControllers([])
+      
+      // 结束进度监控
+      setAnalysisProgress({
+        current: 0,
+        total: 0,
+        isActive: false,
+        currentUrl: '',
+        stage: ''
+      })
     }
   }
 
@@ -592,9 +643,20 @@ export function AnalysisTable() {
     setIsStopRequested(false)
     stopRequestedRef.current = false  // 确保重置停止状态
 
+    // 初始化进度监控
+    setAnalysisProgress({
+      current: 0,
+      total: yResults.length,
+      isActive: true,
+      currentUrl: '',
+      stage: 'preparing'
+    })
+
     try {
       const concurrency = config.concurrencySettings?.enabled ? 
         (config.concurrencySettings?.maxConcurrent || 3) : 1
+
+      let completed = 0
 
       for (let i = 0; i < yResults.length; i += concurrency) {
         if (stopRequestedRef.current) {
@@ -614,11 +676,23 @@ export function AnalysisTable() {
           controllers.push(controller)
 
           try {
+            // 更新当前处理的URL和阶段
+            setAnalysisProgress(prev => ({
+              ...prev,
+              currentUrl: item.url,
+              stage: 'info-crawling'
+            }))
+            
             await handleCrawlCompanyInfo(item.id, item.url, controller)
+            
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
           } catch (error) {
             if (!stopRequestedRef.current) {
               console.error('Crawl info error:', error)
             }
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
           }
         })
 
@@ -644,6 +718,15 @@ export function AnalysisTable() {
       setIsStopRequested(false)
       stopRequestedRef.current = false
       setCurrentAnalysisControllers([])
+      
+      // 结束进度监控
+      setAnalysisProgress({
+        current: 0,
+        total: 0,
+        isActive: false,
+        currentUrl: '',
+        stage: ''
+      })
     }
   }
 
@@ -750,9 +833,53 @@ export function AnalysisTable() {
     toast.success('已强制停止所有分析任务')
   }
 
+  // 新增：获取阶段文本
+  const getStageText = (stage: string) => {
+    switch (stage) {
+      case 'preparing': return '准备中'
+      case 'crawling': return '爬取中'
+      case 'analyzing': return '分析中'
+      case 'info-crawling': return '爬取信息中'
+      default: return '未知阶段'
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
+        {/* 进度监控单独区域 */}
+        {analysisProgress.isActive && (
+          <div className="mb-4 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+                <div>
+                  <div className="text-sm font-medium text-blue-900">
+                    {getStageText(analysisProgress.stage)} - {analysisProgress.current}/{analysisProgress.total}
+                  </div>
+                  <div className="text-xs text-blue-700">
+                    进度: {Math.round((analysisProgress.current / analysisProgress.total) * 100)}%
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex-1 max-w-md mx-4">
+                <Progress 
+                  value={(analysisProgress.current / analysisProgress.total) * 100} 
+                  className="h-2"
+                />
+              </div>
+              
+              {analysisProgress.currentUrl && (
+                <div className="text-xs text-blue-600 max-w-xs truncate" title={analysisProgress.currentUrl}>
+                  当前: {analysisProgress.currentUrl}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 标题和控制区域 */}
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Building className="h-5 w-5" />
@@ -768,18 +895,67 @@ export function AnalysisTable() {
             )}
           </CardTitle>
           
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* 搜索框 */}
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="搜索网站地址、公司名称..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-64"
-              />
-            </div>
+          {/* 操作按钮区域 */}
+          <div className="flex items-center gap-2">
+            {/* 操作按钮 */}
+            {isAnalyzing ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleStopAnalysis}
+                >
+                  <StopCircle className="h-4 w-4 mr-1" />
+                  停止
+                </Button>
+                
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleStopAllAnalysis}
+                >
+                  <StopCircle className="h-4 w-4 mr-1" />
+                  强制停止
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleStartAnalysis}
+                  disabled={!canStartAnalysis}
+                >
+                  <Play className="h-4 w-4 mr-1" />
+                  开始分析
+                </Button>
+                
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleCrawlAllYResults}
+                  disabled={!canCrawlAll}
+                >
+                  <PlayCircle className="h-4 w-4 mr-1" />
+                  爬取信息
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
 
-            {/* 筛选和排序控制 */}
+        {/* 搜索和筛选区域 */}
+        <div className="flex items-center justify-between mt-4">
+          <div className="flex items-center gap-2">
+            {/* 搜索框 */}
+            <Input
+              placeholder="搜索网站地址、公司名称..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-64"
+            />
+
+            {/* 筛选控制 */}
             <div className="flex items-center gap-2 border rounded-lg p-2 bg-gray-50">
               <Filter className="h-4 w-4 text-gray-500" />
               <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -828,60 +1004,18 @@ export function AnalysisTable() {
                 </Button>
               )}
             </div>
+          </div>
 
+          {/* 功能按钮区域 */}
+          <div className="flex items-center gap-2">
             {/* 表格设置 */}
             <Button
               variant="outline"
-              size="icon"
+              size="sm"
               onClick={() => setShowTableSettings(!showTableSettings)}
             >
               <Settings className="h-4 w-4" />
             </Button>
-
-            {/* 操作按钮 */}
-            {isAnalyzing ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleStopAnalysis}
-                >
-                  <StopCircle className="h-4 w-4 mr-2" />
-                  停止分析
-                </Button>
-                
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleStopAllAnalysis}
-                >
-                  <StopCircle className="h-4 w-4 mr-2" />
-                  全部停止
-                </Button>
-              </div>
-            ) : (
-              <>
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={handleStartAnalysis}
-                  disabled={!canStartAnalysis}
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  开始分析
-                </Button>
-                
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleCrawlAllYResults}
-                  disabled={!canCrawlAll}
-                >
-                  <PlayCircle className="h-4 w-4 mr-2" />
-                  一键爬取信息
-                </Button>
-              </>
-            )}
 
             <Button
               variant="outline"
@@ -889,7 +1023,7 @@ export function AnalysisTable() {
               onClick={handleCopyData}
               disabled={filteredAndSortedData.length === 0}
             >
-              <Copy className="h-4 w-4 mr-2" />
+              <Copy className="h-4 w-4 mr-1" />
               复制
             </Button>
 
@@ -900,7 +1034,7 @@ export function AnalysisTable() {
                 size="sm"
                 disabled={filteredAndSortedData.length === 0}
               >
-                <Download className="h-4 w-4 mr-2" />
+                <Download className="h-4 w-4 mr-1" />
                 导出
                 <ChevronDown className="h-4 w-4 ml-1" />
               </Button>
@@ -936,7 +1070,7 @@ export function AnalysisTable() {
               onClick={handleDeleteSelected}
               disabled={selectedIds.length === 0}
             >
-              <Trash2 className="h-4 w-4 mr-2" />
+              <Trash2 className="h-4 w-4 mr-1" />
               删除选中
             </Button>
 
@@ -946,7 +1080,7 @@ export function AnalysisTable() {
               onClick={handleClearAll}
               disabled={analysisData.length === 0}
             >
-              <Trash2 className="h-4 w-4 mr-2" />
+              <Trash2 className="h-4 w-4 mr-1" />
               清空
             </Button>
           </div>
@@ -956,19 +1090,8 @@ export function AnalysisTable() {
         {showTableSettings && (
           <div className="mt-4 p-4 border rounded-lg bg-gray-50">
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm">每页显示：</span>
-                <Select value={pageSize.toString()} onValueChange={(v) => setPageSize(Number(v))}>
-                  <SelectTrigger className="w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="10">10</SelectItem>
-                    <SelectItem value="20">20</SelectItem>
-                    <SelectItem value="50">50</SelectItem>
-                    <SelectItem value="100">100</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="text-sm text-gray-600">
+                固定每页显示 100 条记录
               </div>
             </div>
           </div>

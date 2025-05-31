@@ -257,6 +257,26 @@ export function BackgroundTaskMonitor() {
             <Badge variant="outline">
               {summary.total} 个任务
             </Badge>
+            {/* 快速状态概览 */}
+            {summary.total > 0 && (
+              <div className="flex items-center gap-1 ml-3">
+                {summary.running > 0 && (
+                  <Badge variant="default" className="bg-blue-500 text-xs px-2 py-0">
+                    {summary.running} 运行中
+                  </Badge>
+                )}
+                {summary.pending > 0 && (
+                  <Badge variant="secondary" className="text-xs px-2 py-0">
+                    {summary.pending} 等待
+                  </Badge>
+                )}
+                {summary.failed > 0 && (
+                  <Badge variant="destructive" className="text-xs px-2 py-0">
+                    {summary.failed} 失败
+                  </Badge>
+                )}
+              </div>
+            )}
           </CardTitle>
           
           <div className="flex items-center gap-2">
@@ -266,7 +286,7 @@ export function BackgroundTaskMonitor() {
               onClick={fetchTasks}
               disabled={isLoading}
             >
-              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
               刷新
             </Button>
             
@@ -276,50 +296,45 @@ export function BackgroundTaskMonitor() {
               onClick={cleanupTasks}
               disabled={summary.completed === 0}
             >
-              <Trash2 className="h-4 w-4 mr-2" />
-              清理已完成
+              <Trash2 className="h-4 w-4 mr-1" />
+              清理
             </Button>
-          </div>
-        </div>
-
-        {/* 任务统计 */}
-        <div className="flex items-center gap-4 mt-4">
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary">{summary.pending} 等待中</Badge>
-            <Badge variant="default" className="bg-blue-500">{summary.running} 运行中</Badge>
-            <Badge variant="default" className="bg-green-500">{summary.completed} 已完成</Badge>
-            <Badge variant="destructive">{summary.failed} 失败</Badge>
           </div>
         </div>
       </CardHeader>
 
       <CardContent>
         {tasks.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-6 text-muted-foreground">
             暂无后台任务
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {tasks.map((task) => (
-              <div key={task.id} className="border rounded-lg p-4">
+              <div key={task.id} className="border rounded-lg p-3">
+                {/* 任务基本信息 */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     {getStatusIcon(task.status)}
-                    <span className="font-medium">
+                    <span className="font-medium text-sm">
                       {task.type === 'analyze' ? '分析任务' : '爬取任务'}
                     </span>
                     {getStatusBadge(task.status)}
+                    <span className="text-xs text-muted-foreground font-mono">
+                      ID: {task.id.substring(0, 8)}
+                    </span>
                   </div>
                   
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     {task.status === 'completed' && (
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => getTaskResults(task.id)}
+                        className="h-7 text-xs"
                       >
                         <Download className="h-3 w-3 mr-1" />
-                        下载结果
+                        下载
                       </Button>
                     )}
                     
@@ -327,10 +342,10 @@ export function BackgroundTaskMonitor() {
                       variant="outline"
                       size="sm"
                       onClick={() => checkTaskConfig(task.id)}
-                      title="检查任务的API配置是否已缓存"
+                      title="检查任务配置"
+                      className="h-7 text-xs"
                     >
-                      <Settings className="h-3 w-3 mr-1" />
-                      检查配置
+                      <Settings className="h-3 w-3" />
                     </Button>
                     
                     {(task.status === 'pending' || task.status === 'running') && (
@@ -338,6 +353,7 @@ export function BackgroundTaskMonitor() {
                         variant="outline"
                         size="sm"
                         onClick={() => cancelTask(task.id)}
+                        className="h-7 text-xs"
                       >
                         <StopCircle className="h-3 w-3 mr-1" />
                         取消
@@ -346,56 +362,36 @@ export function BackgroundTaskMonitor() {
                   </div>
                 </div>
 
-                {/* 任务进度 */}
-                <div className="mb-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-muted-foreground">
-                      进度: {task.progress.current} / {task.progress.total}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
+                {/* 进度条和统计信息 */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-4">
+                      <span className="text-muted-foreground">
+                        进度: {task.progress.current}/{task.progress.total}
+                      </span>
+                      <span className="text-green-600">成功: {task.resultsCount}</span>
+                      <span className="text-red-600">失败: {task.errorsCount}</span>
+                    </div>
+                    <span className="text-muted-foreground text-xs">
                       {getProgressPercentage(task.progress)}%
                     </span>
                   </div>
+                  
                   <Progress 
                     value={getProgressPercentage(task.progress)} 
-                    className="h-2"
+                    className="h-1.5"
                   />
                 </div>
 
-                {/* 任务详情 */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">网站数量:</span>
-                    <span className="ml-2 font-medium">{task.urlCount}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">成功:</span>
-                    <span className="ml-2 font-medium text-green-600">{task.resultsCount}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">失败:</span>
-                    <span className="ml-2 font-medium text-red-600">{task.errorsCount}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">任务ID:</span>
-                    <span className="ml-2 font-mono text-xs">{task.id.substring(0, 8)}...</span>
-                  </div>
-                </div>
-
-                {/* 时间信息 */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm mt-3 pt-3 border-t">
-                  <div>
-                    <span className="text-muted-foreground">创建时间:</span>
-                    <div className="text-xs">{formatTime(task.createdAt)}</div>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">开始时间:</span>
-                    <div className="text-xs">{formatTime(task.startedAt)}</div>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">完成时间:</span>
-                    <div className="text-xs">{formatTime(task.completedAt)}</div>
-                  </div>
+                {/* 时间信息 - 仅显示重要时间 */}
+                <div className="flex justify-between text-xs text-muted-foreground mt-2 pt-2 border-t">
+                  <span>创建: {formatTime(task.createdAt)}</span>
+                  {task.completedAt && (
+                    <span>完成: {formatTime(task.completedAt)}</span>
+                  )}
+                  {task.status === 'running' && task.startedAt && (
+                    <span>开始: {formatTime(task.startedAt)}</span>
+                  )}
                 </div>
               </div>
             ))}

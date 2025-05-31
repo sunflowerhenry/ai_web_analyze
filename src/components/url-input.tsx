@@ -61,12 +61,11 @@ export function UrlInput() {
       // 直接添加到分析表格
       addUrls(validUrls)
       setInputText('')
-      toast.success(`成功添加 ${validUrls.length} 个网站链接`)
-
-      // 如果配置完整，自动开始后台分析
-      if (isConfigComplete) {
-        handleBackgroundTask(validUrls)
-      }
+      
+      toast.success(`成功添加 ${validUrls.length} 个网站链接`, {
+        description: isConfigComplete ? '请点击分析表格中的开始按钮开始分析' : '请先完成AI配置',
+        duration: 5000
+      })
     }
   }
 
@@ -154,54 +153,75 @@ export function UrlInput() {
 
   // 实时更新状态和结果
   const updateRealtimeStatus = (statusData: any) => {
-    const { updateResult, analysisData } = useAnalysisStore.getState()
+    const { updateResult, analysisData, addUrls } = useAnalysisStore.getState()
     
-    // 更新正在处理的URL状态
-    if (statusData.currentlyProcessing && statusData.currentlyProcessing.length > 0) {
-      statusData.currentlyProcessing.forEach((url: string) => {
-        const existingItem = analysisData.find(item => item.url === url)
-        if (existingItem && existingItem.status === 'waiting') {
-          updateResult(existingItem.id, {
-            status: 'analyzing'
-          })
-        }
-      })
-    }
-    
-    // 更新最近完成的结果
-    if (statusData.recentResults && statusData.recentResults.length > 0) {
-      statusData.recentResults.forEach((result: any) => {
-        const existingItem = analysisData.find(item => item.url === result.url)
-        if (existingItem) {
-          updateResult(existingItem.id, {
-            result: result.analyzeData?.result || 'PENDING',
-            reason: result.analyzeData?.reason || '',
-            status: 'completed',
-            crawledContent: result.crawlData
-          })
-        }
-      })
-    }
-    
-    // 更新最近的错误
-    if (statusData.recentErrors && statusData.recentErrors.length > 0) {
-      statusData.recentErrors.forEach((error: any) => {
-        const existingItem = analysisData.find(item => item.url === error.url)
-        if (existingItem) {
-          updateResult(existingItem.id, {
-            result: 'ERROR',
-            reason: error.message,
-            status: 'failed',
-            error: error.message,
-            errorDetails: {
-              type: error.type || 'unknown_error',
-              stage: error.stage || 'crawling',
-              message: error.message,
-              retryable: true
-            }
-          })
-        }
-      })
+    try {
+      // 确保所有URL都已添加到分析数据中
+      const existingUrls = new Set(analysisData.map(item => item.url))
+      const allUrls = [
+        ...statusData.recentResults?.map((r: any) => r.url) || [],
+        ...statusData.recentErrors?.map((e: any) => e.url) || [],
+        ...statusData.currentlyProcessing || []
+      ]
+      
+      const newUrls = allUrls.filter(url => url && !existingUrls.has(url))
+      if (newUrls.length > 0) {
+        console.log('添加缺失的URL到分析数据:', newUrls)
+        addUrls(newUrls)
+      }
+      
+      // 获取最新的分析数据
+      const latestAnalysisData = useAnalysisStore.getState().analysisData
+      
+      // 更新正在处理的URL状态
+      if (statusData.currentlyProcessing && statusData.currentlyProcessing.length > 0) {
+        statusData.currentlyProcessing.forEach((url: string) => {
+          const existingItem = latestAnalysisData.find(item => item.url === url)
+          if (existingItem && existingItem.status === 'waiting') {
+            updateResult(existingItem.id, {
+              status: 'analyzing'
+            })
+          }
+        })
+      }
+      
+      // 更新最近完成的结果
+      if (statusData.recentResults && statusData.recentResults.length > 0) {
+        statusData.recentResults.forEach((result: any) => {
+          const existingItem = latestAnalysisData.find(item => item.url === result.url)
+          if (existingItem) {
+            updateResult(existingItem.id, {
+              result: result.analyzeData?.result || 'PENDING',
+              reason: result.analyzeData?.reason || '',
+              status: 'completed',
+              crawledContent: result.crawlData
+            })
+          }
+        })
+      }
+      
+      // 更新最近的错误
+      if (statusData.recentErrors && statusData.recentErrors.length > 0) {
+        statusData.recentErrors.forEach((error: any) => {
+          const existingItem = latestAnalysisData.find(item => item.url === error.url)
+          if (existingItem) {
+            updateResult(existingItem.id, {
+              result: 'ERROR',
+              reason: error.message,
+              status: 'failed',
+              error: error.message,
+              errorDetails: {
+                type: error.type || 'unknown_error',
+                stage: error.stage || 'crawling',
+                message: error.message,
+                retryable: true
+              }
+            })
+          }
+        })
+      }
+    } catch (error) {
+      console.error('更新实时状态失败:', error)
     }
   }
 
@@ -224,7 +244,7 @@ export function UrlInput() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Plus className="h-5 w-5" />
-          添加网站链接 (后台分析模式)
+          添加网站链接
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -239,7 +259,7 @@ export function UrlInput() {
           <p className="text-sm text-muted-foreground mt-2">
             支持多种格式：example.com、https://example.com、www.example.com
             <br />
-            <span className="text-blue-600 font-medium">✨ 任务将在后台运行，即使关闭页面也会继续分析</span>
+            <span className="text-blue-600 font-medium">✨ 添加后请在分析表格中点击开始按钮开始分析</span>
           </p>
         </div>
 
@@ -247,24 +267,15 @@ export function UrlInput() {
           <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
             <AlertTriangle className="h-4 w-4 text-yellow-600" />
             <span className="text-sm text-yellow-800">
-              请先完成AI配置才能启用分析功能
+              请先完成AI配置，然后在分析表格中点击开始按钮
             </span>
           </div>
         )}
 
         <div className="flex gap-2">
           <Button onClick={handleAddUrls} className="flex-1">
-            {isConfigComplete ? (
-              <>
-                <PlayCircle className="h-4 w-4 mr-2" />
-                添加并开始分析
-              </>
-            ) : (
-              <>
-                <Plus className="h-4 w-4 mr-2" />
-                添加到列表
-              </>
-            )}
+            <Plus className="h-4 w-4 mr-2" />
+            添加到分析列表
           </Button>
           
           <div className="relative">
@@ -284,11 +295,9 @@ export function UrlInput() {
         {inputText && (
           <div className="text-sm text-muted-foreground">
             当前输入了 {urlCount} 个链接
-            {isConfigComplete && (
-              <span className="ml-2 text-blue-600 font-medium">
-                · 将在后台自动分析，关闭页面后仍会继续
-              </span>
-            )}
+            <span className="ml-2 text-blue-600 font-medium">
+              · 添加后请在分析表格中点击开始按钮
+            </span>
           </div>
         )}
 
