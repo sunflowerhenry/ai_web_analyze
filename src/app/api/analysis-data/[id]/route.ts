@@ -1,41 +1,62 @@
-import { type NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import path from 'node:path'
 
-interface AnalysisResult {
-  id: string
-  url: string
-  result: 'Y' | 'N' | 'PENDING' | 'ERROR'
-  reason: string
-  companyInfo?: any
-  emails?: any[]
-  status: string
-  crawledContent?: any
-  error?: string
-  errorDetails?: any
-  createdAt: Date
-  updatedAt: Date
-  hasInfoCrawled: boolean
-  infoCrawlProgress?: number
-  backgroundTask?: any
-}
+// 检查是否为生产环境
+const isProduction = process.env.NODE_ENV === 'production'
 
-const DATA_DIR = join(process.cwd(), 'data')
-const DATA_FILE = join(DATA_DIR, 'analysis-results.json')
+// 生产环境使用内存存储，开发环境使用文件存储
+let memoryStore: any[] = []
 
-async function readData(): Promise<AnalysisResult[]> {
-  try {
-    const data = await fs.readFile(DATA_FILE, 'utf-8')
-    return JSON.parse(data)
-  } catch {
-    return []
+const DATA_FILE = path.join(process.cwd(), 'data', 'analysis-results.json')
+
+// 数据访问层
+class DataStore {
+  async read(): Promise<any[]> {
+    if (isProduction) {
+      return memoryStore
+    }
+    
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
+
+      const fileContent = await fs.readFile(DATA_FILE, 'utf-8')
+      return JSON.parse(fileContent)
+    } catch {
+      return []
+    }
+  }
+
+  async write(data: any[]): Promise<void> {
+    if (isProduction) {
+      memoryStore = [...data]
+      return
+    }
+
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
+
+      await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8')
+    } catch (error) {
+      console.error('Failed to write data:', error)
+      throw error
+    }
   }
 }
 
-async function writeData(data: AnalysisResult[]) {
-  await fs.mkdir(DATA_DIR, { recursive: true })
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2))
-}
+const dataStore = new DataStore()
 
 export async function PATCH(
   request: NextRequest,
@@ -43,37 +64,36 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params
-    const updateData = await request.json()
+    const updates = await request.json()
     
-    const allData = await readData()
-    const itemIndex = allData.findIndex(item => item.id === id)
+    const allData = await dataStore.read()
+    const index = allData.findIndex((item: any) => item.id === id)
     
-    if (itemIndex === -1) {
-      return NextResponse.json({ error: 'Item not found' }, { status: 404 })
+    if (index === -1) {
+      return NextResponse.json(
+        { success: false, error: '项目不存在' },
+        { status: 404 }
+      )
     }
     
-    // 优化存储，限制内容长度
-    const optimizedUpdate = { ...updateData }
-    if (updateData.crawledContent) {
-      optimizedUpdate.crawledContent = {
-        title: updateData.crawledContent.title,
-        description: updateData.crawledContent.description,
-        content: updateData.crawledContent.content?.substring(0, 2000), // 限制内容长度
-        pages: undefined // 不存储pages数组，太占空间
-      }
+    // 更新项目
+    allData[index] = {
+      ...allData[index],
+      ...updates,
+      updatedAt: new Date().toISOString()
     }
     
-    allData[itemIndex] = {
-      ...allData[itemIndex],
-      ...optimizedUpdate,
-      updatedAt: new Date()
-    }
+    await dataStore.write(allData)
     
-    await writeData(allData)
-    
-    return NextResponse.json({ success: true })
+    return NextResponse.json({
+      success: true,
+      result: allData[index]
+    })
   } catch (error) {
     console.error('Error updating analysis result:', error)
-    return NextResponse.json({ error: 'Failed to update' }, { status: 500 })
+    return NextResponse.json(
+      { success: false, error: '更新失败' },
+      { status: 500 }
+    )
   }
 } 

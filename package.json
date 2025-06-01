@@ -4,14 +4,19 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"dev": "next dev",
 		"build": "next build",
+		"start": "next start",
+		"lint": "next lint",
+		"typecheck": "tsc --noEmit",
+		"clean-sensitive": "node scripts/clean-sensitive-data.cjs",
+		"deploy-init": "node scripts/deploy-init.cjs",
+		"build-production": "npm run clean-sensitive && npm run deploy-init && npm run build",
+		"security-check": "npm run clean-sensitive && echo '✅ 安全检查完成'",
 		"check": "biome check .",
 		"check:unsafe": "biome check --write --unsafe .",
 		"check:write": "biome check --write .",
-		"dev": "next dev",
-		"preview": "next build && next start",
-		"start": "next start",
-		"typecheck": "tsc --noEmit"
+		"preview": "next build && next start"
 	},
 	"dependencies": {
 		"@hookform/resolvers": "^5.0.1",

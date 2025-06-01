@@ -13,10 +13,10 @@
 		/* Strictness */
 		"strict": true,
 		"noUncheckedIndexedAccess": true,
-		"checkJs": true,
+		"noImplicitOverride": true,
 
 		/* Bundled projects */
-		"lib": ["dom", "dom.iterable", "ES2022"],
+		"lib": ["es2022", "dom", "dom.iterable"],
 		"noEmit": true,
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
@@ -34,9 +34,12 @@
 		"next-env.d.ts",
 		"**/*.ts",
 		"**/*.tsx",
-		"**/*.cjs",
-		"**/*.js",
 		".next/types/**/*.ts"
 	],
-	"exclude": ["node_modules"]
+	"exclude": [
+		"node_modules",
+		"scripts/**/*",
+		"dist",
+		".next/server/**/*"
+	]
 }

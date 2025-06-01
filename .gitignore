@@ -4,6 +4,7 @@
 /node_modules
 /.pnp
 .pnp.js
+.yarn/install-state.gz
 
 # testing
 /coverage
@@ -44,3 +45,32 @@ yarn-error.log*
 
 # idea files
 .idea
+
+# 数据文件和敏感信息
+/data/
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!next.config.js
+!tailwind.config.js
+
+# 防止API密钥泄露
+.env
+.env.local
+.env.production
+.env.development
+
+# 用户配置和数据
+/user-data/
+/config/
+/uploads/
+/exports/
+
+# 日志文件
+*.log
+/logs/
+
+# 临时文件
+/tmp/
+/temp/

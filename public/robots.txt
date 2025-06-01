@@ -1,0 +1,10 @@
+User-agent: *
+Disallow: /api/
+Disallow: /data/
+Disallow: /_next/
+Disallow: /scripts/
+
+# 允许访问主页
+Allow: /
+
+Sitemap: https://example.com/sitemap.xml

@@ -1,167 +1,132 @@
-import type { NextRequest } from 'next/server'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
+// 检查是否为生产环境
+const isProduction = process.env.NODE_ENV === 'production'
+
+// 生产环境使用内存存储，开发环境使用文件存储
+let memoryFailedStore: any[] = []
+
 const FAILED_DATA_FILE = path.join(process.cwd(), 'data', 'failed-analysis.json')
 
-interface FailedAnalysisData {
-  id: string
-  url: string
-  timestamp: string
-  stage: string // 'crawling', 'analyzing', 'info-crawling'
-  errorType: string
-  errorMessage: string
-  requestData?: any
-  responseData?: any
-  stackTrace?: string
-  userAgent?: string
-  proxyUsed?: string
-  configUsed?: any
-}
+// 失败数据存储层
+class FailedDataStore {
+  async read(): Promise<any[]> {
+    if (isProduction) {
+      return memoryFailedStore
+    }
+    
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(FAILED_DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
 
-// 确保数据目录存在
-async function ensureDataDirectory() {
-  const dataDir = path.dirname(FAILED_DATA_FILE)
-  try {
-    await fs.access(dataDir)
-  } catch {
-    await fs.mkdir(dataDir, { recursive: true })
+      const fileContent = await fs.readFile(FAILED_DATA_FILE, 'utf-8')
+      return JSON.parse(fileContent)
+    } catch {
+      // 文件不存在时返回空数组
+      return []
+    }
+  }
+
+  async write(data: any[]): Promise<void> {
+    if (isProduction) {
+      memoryFailedStore = [...data]
+      return
+    }
+
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(FAILED_DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
+
+      await fs.writeFile(FAILED_DATA_FILE, JSON.stringify(data, null, 2), 'utf-8')
+    } catch (error) {
+      console.error('Failed to write failed data:', error)
+      throw error
+    }
   }
 }
 
-// 读取失败数据
-async function readFailedData(): Promise<FailedAnalysisData[]> {
-  await ensureDataDirectory()
-  try {
-    const data = await fs.readFile(FAILED_DATA_FILE, 'utf-8')
-    return JSON.parse(data)
-  } catch (error) {
-    return []
-  }
-}
+const failedDataStore = new FailedDataStore()
 
-// 写入失败数据
-async function writeFailedData(data: FailedAnalysisData[]) {
-  await ensureDataDirectory()
-  await fs.writeFile(FAILED_DATA_FILE, JSON.stringify(data, null, 2))
-}
-
-// GET - 获取所有失败数据
 export async function GET() {
   try {
-    const failedData = await readFailedData()
+    const data = await failedDataStore.read()
     
     return NextResponse.json({
       success: true,
-      data: failedData,
-      total: failedData.length,
-      filePath: FAILED_DATA_FILE
+      data,
+      count: data.length,
+      filePath: isProduction ? '内存存储' : FAILED_DATA_FILE
     })
   } catch (error) {
-    console.error('Failed to read failed data:', error)
+    console.error('Error reading failed data:', error)
     return NextResponse.json(
-      { success: false, error: '读取失败数据时发生错误' },
+      { 
+        success: false, 
+        error: '读取失败数据时出错',
+        data: [],
+        count: 0
+      },
       { status: 500 }
     )
   }
 }
 
-// POST - 添加失败数据
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { url, stage, errorType, errorMessage, requestData, responseData, stackTrace, userAgent, proxyUsed, configUsed } = body
-
-    if (!url || !stage || !errorType || !errorMessage) {
-      return NextResponse.json(
-        { success: false, error: '缺少必要参数' },
-        { status: 400 }
-      )
-    }
-
-    const failedData = await readFailedData()
+    const newFailedItem = await request.json()
     
-    const newFailedEntry: FailedAnalysisData = {
-      id: `failed_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      url,
+    const existingData = await failedDataStore.read()
+    const updatedData = [...existingData, {
+      ...newFailedItem,
       timestamp: new Date().toISOString(),
-      stage,
-      errorType,
-      errorMessage,
-      requestData,
-      responseData,
-      stackTrace,
-      userAgent,
-      proxyUsed,
-      configUsed
-    }
-
-    failedData.push(newFailedEntry)
+      id: crypto.randomUUID()
+    }]
     
-    // 保持最近的1000条失败记录
-    if (failedData.length > 1000) {
-      failedData.splice(0, failedData.length - 1000)
-    }
-
-    await writeFailedData(failedData)
+    // 限制失败数据条目数量（最多保存1000条）
+    const limitedData = updatedData.length > 1000 
+      ? updatedData.slice(-1000) 
+      : updatedData
+    
+    await failedDataStore.write(limitedData)
     
     return NextResponse.json({
       success: true,
-      message: '失败数据已保存',
-      data: newFailedEntry
+      added: 1,
+      total: limitedData.length
     })
   } catch (error) {
-    console.error('Failed to save failed data:', error)
+    console.error('Error adding failed data:', error)
     return NextResponse.json(
-      { success: false, error: '保存失败数据时发生错误' },
+      { success: false, error: '添加失败数据时出错' },
       { status: 500 }
     )
   }
 }
 
-// DELETE - 删除失败数据
-export async function DELETE(request: NextRequest) {
+export async function DELETE() {
   try {
-    const { searchParams } = new URL(request.url)
-    const id = searchParams.get('id')
-    const deleteAll = searchParams.get('all') === 'true'
-
-    if (deleteAll) {
-      await writeFailedData([])
-      return NextResponse.json({
-        success: true,
-        message: '所有失败数据已清空'
-      })
-    }
-
-    if (!id) {
-      return NextResponse.json(
-        { success: false, error: '缺少ID参数' },
-        { status: 400 }
-      )
-    }
-
-    const failedData = await readFailedData()
-    const filteredData = failedData.filter(item => item.id !== id)
-    
-    if (filteredData.length === failedData.length) {
-      return NextResponse.json(
-        { success: false, error: '未找到指定的失败数据' },
-        { status: 404 }
-      )
-    }
-
-    await writeFailedData(filteredData)
+    await failedDataStore.write([])
     
     return NextResponse.json({
       success: true,
-      message: '失败数据已删除'
+      message: '所有失败数据已清空'
     })
   } catch (error) {
-    console.error('Failed to delete failed data:', error)
+    console.error('Error clearing failed data:', error)
     return NextResponse.json(
-      { success: false, error: '删除失败数据时发生错误' },
+      { success: false, error: '清空失败数据时出错' },
       { status: 500 }
     )
   }

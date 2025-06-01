@@ -1,6 +1,62 @@
-import { type NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import path from 'node:path'
+
+// 检查是否为生产环境
+const isProduction = process.env.NODE_ENV === 'production'
+
+// 生产环境使用内存存储，开发环境使用文件存储
+let memoryStore: any[] = []
+
+const DATA_FILE = path.join(process.cwd(), 'data', 'analysis-results.json')
+
+// 数据访问层
+class DataStore {
+  async read(): Promise<any[]> {
+    if (isProduction) {
+      return memoryStore
+    }
+    
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
+
+      const fileContent = await fs.readFile(DATA_FILE, 'utf-8')
+      return JSON.parse(fileContent)
+    } catch {
+      return []
+    }
+  }
+
+  async write(data: any[]): Promise<void> {
+    if (isProduction) {
+      memoryStore = [...data]
+      return
+    }
+
+    try {
+      // 确保数据目录存在
+      const dataDir = path.dirname(DATA_FILE)
+      try {
+        await fs.access(dataDir)
+      } catch {
+        await fs.mkdir(dataDir, { recursive: true })
+      }
+
+      await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8')
+    } catch (error) {
+      console.error('Failed to write data:', error)
+      throw error
+    }
+  }
+}
+
+const dataStore = new DataStore()
 
 interface AnalysisResult {
   id: string
@@ -20,75 +76,35 @@ interface AnalysisResult {
   backgroundTask?: any
 }
 
-const DATA_DIR = join(process.cwd(), 'data')
-const DATA_FILE = join(DATA_DIR, 'analysis-results.json')
-
-// 确保数据目录存在
-async function ensureDataDir() {
-  try {
-    await fs.access(DATA_DIR)
-  } catch {
-    await fs.mkdir(DATA_DIR, { recursive: true })
-  }
-}
-
-// 读取数据
-async function readData(): Promise<AnalysisResult[]> {
-  await ensureDataDir()
-  try {
-    const data = await fs.readFile(DATA_FILE, 'utf-8')
-    const parsed = JSON.parse(data)
-    
-    // 清理过期数据（7天前的数据）
-    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-    const filtered = parsed.filter((item: AnalysisResult) => 
-      new Date(item.createdAt) > oneWeekAgo
-    )
-    
-    // 如果有数据被清理，重新写入文件
-    if (filtered.length !== parsed.length) {
-      await writeData(filtered)
-      console.log(`[API] 清理了 ${parsed.length - filtered.length} 条过期数据`)
-    }
-    
-    return filtered
-  } catch {
-    return []
-  }
-}
-
-// 写入数据
-async function writeData(data: AnalysisResult[]) {
-  await ensureDataDir()
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2))
-}
-
 // GET - 获取分析数据（分页）
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const page = Number.parseInt(searchParams.get('page') || '1')
-    const limit = Number.parseInt(searchParams.get('limit') || '100')
+    const url = new URL(request.url)
+    const page = Number.parseInt(url.searchParams.get('page') || '1')
+    const limit = Number.parseInt(url.searchParams.get('limit') || '100')
     
-    const allData = await readData()
+    const data = await dataStore.read()
     
-    // 按创建时间倒序排序
-    allData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    
+    // 分页处理
     const startIndex = (page - 1) * limit
     const endIndex = startIndex + limit
-    const paginatedData = allData.slice(startIndex, endIndex)
+    const paginatedData = data.slice(startIndex, endIndex)
     
     return NextResponse.json({
+      success: true,
       results: paginatedData,
-      total: allData.length,
+      total: data.length,
       page,
       limit,
-      totalPages: Math.ceil(allData.length / limit)
+      hasNext: endIndex < data.length,
+      hasPrev: page > 1
     })
   } catch (error) {
-    console.error('Error getting analysis data:', error)
-    return NextResponse.json({ error: 'Failed to get data' }, { status: 500 })
+    console.error('Error reading analysis data:', error)
+    return NextResponse.json(
+      { success: false, error: '读取数据失败' },
+      { status: 500 }
+    )
   }
 }
 
@@ -101,7 +117,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URLs must be an array' }, { status: 400 })
     }
     
-    const allData = await readData()
+    const allData = await dataStore.read()
     const existingUrls = new Set(allData.map(item => item.url))
     
     const newResults: AnalysisResult[] = urls
@@ -124,7 +140,7 @@ export async function POST(request: NextRequest) {
       ? updatedData.slice(-10000) 
       : updatedData
     
-    await writeData(limitedData)
+    await dataStore.write(limitedData)
     
     console.log(`[API] 添加了 ${newResults.length} 个新URL，总数: ${limitedData.length}`)
     
@@ -144,19 +160,19 @@ export async function DELETE(request: NextRequest) {
     const body = await request.json().catch(() => ({}))
     const { ids } = body
     
-    const allData = await readData()
+    const allData = await dataStore.read()
     
     if (ids && Array.isArray(ids)) {
       // 删除指定ID的数据
       const filteredData = allData.filter(item => !ids.includes(item.id))
-      await writeData(filteredData)
+      await dataStore.write(filteredData)
       return NextResponse.json({ 
         deleted: allData.length - filteredData.length,
         remaining: filteredData.length 
       })
     } else {
       // 清空所有数据
-      await writeData([])
+      await dataStore.write([])
       return NextResponse.json({ deleted: allData.length, remaining: 0 })
     }
   } catch (error) {
