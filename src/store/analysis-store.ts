@@ -101,19 +101,23 @@ export interface AnalysisResult {
   }
 }
 
-interface AnalysisState {
-  // 配置相关
+// 分离配置存储和数据存储
+interface ConfigState {
   config: AIConfig
   updateConfig: (config: Partial<AIConfig>) => void
-  
-  // 分析数据
+}
+
+interface DataState {
+  // 分析数据现在从服务端获取
   analysisData: AnalysisResult[]
-  addUrls: (urls: string[]) => void
-  updateResult: (id: string, result: Partial<AnalysisResult>) => void
-  deleteResults: (ids: string[]) => void
-  clearResults: () => void
+  loadAnalysisData: (page?: number, limit?: number) => Promise<void>
+  getAllPendingUrls: () => Promise<string[]>
+  addUrls: (urls: string[]) => Promise<boolean>
+  updateResult: (id: string, result: Partial<AnalysisResult>) => Promise<void>
+  deleteResults: (ids: string[]) => Promise<void>
+  clearResults: () => Promise<void>
   
-  // 分析状态
+  // 分析状态（保持本地）
   isAnalyzing: boolean
   currentProgress: number
   totalItems: number
@@ -125,6 +129,13 @@ interface AnalysisState {
   addBackgroundTask: (taskId: string) => void
   removeBackgroundTask: (taskId: string) => void
   syncBackgroundTaskResults: (taskId: string) => Promise<void>
+  
+  // 分页状态
+  currentPage: number
+  itemsPerPage: number
+  totalCount: number
+  setPage: (page: number) => void
+  setItemsPerPage: (count: number) => void
 }
 
 const defaultConfig: AIConfig = {
@@ -232,274 +243,203 @@ const defaultConfig: AIConfig = {
 }`
 }
 
-export const useAnalysisStore = create<AnalysisState>()(
+// 配置存储（本地持久化）
+export const useConfigStore = create<ConfigState>()(
   persist(
-    (set, get) => ({
-      // 配置相关
+    (set) => ({
       config: defaultConfig,
-      updateConfig: (newConfig) => {
-        console.log('Store updateConfig called with:', newConfig)
-        console.log('Current config before update:', get().config)
-        
-        set((state) => {
-          const updatedConfig = { ...state.config, ...newConfig }
-          console.log('Updated config (before set):', updatedConfig)
-          
-          return { config: updatedConfig }
-        })
-        
-        // 验证更新后的状态
-        setTimeout(() => {
-          const currentState = get()
-          console.log('Store state after update:', currentState.config)
-        }, 50)
-      },
-      
-      // 分析数据
-      analysisData: [],
-      addUrls: (urls) =>
-        set((state) => {
-          const existingUrls = new Set(state.analysisData.map(item => item.url))
-          const newResults: AnalysisResult[] = urls
-            .filter(url => url.trim() && !existingUrls.has(url.trim()))
-            .map(url => ({
-              id: crypto.randomUUID(),
-              url: url.trim(),
-              result: 'PENDING' as const,
-              reason: '',
-              status: 'waiting' as const,
-              hasInfoCrawled: false,
-              createdAt: new Date(),
-              updatedAt: new Date()
-            }))
-          
-          // 自动清理：如果数据太多，保留最新的10000条（提升限制）
-          const allData = [...state.analysisData, ...newResults]
-          const limitedData = allData.length > 10000 
-            ? allData.slice(-10000) 
-            : allData
-          
-          console.log(`[Store] 添加了 ${newResults.length} 个新URL，总数: ${limitedData.length}`)
-          
-          return {
-            analysisData: limitedData
-          }
-        }),
-      
-      updateResult: (id, result) =>
-        set((state) => {
-          // 找到要更新的项目
-          const itemIndex = state.analysisData.findIndex(item => item.id === id)
-          if (itemIndex === -1) {
-            console.warn(`[Store] 尝试更新不存在的项目: ${id}`)
-            return state // 如果找不到项目，不做任何更改
-          }
-          
-          // 优化crawledContent存储，只保留必要信息
-          const optimizedResult = { ...result }
-          if (result.crawledContent) {
-            optimizedResult.crawledContent = {
-              title: result.crawledContent.title,
-              description: result.crawledContent.description,
-              // 限制content长度，避免存储过大
-              content: result.crawledContent.content?.substring(0, 1500), // 限制到1500字符
-              // 不存储页面数组，太占空间
-              pages: undefined
-            }
-          }
-          
-          // 创建新的数组，确保不可变性
-          const newAnalysisData = [...state.analysisData]
-          const existingItem = newAnalysisData[itemIndex]
-          newAnalysisData[itemIndex] = { 
-            ...existingItem, 
-            ...optimizedResult, 
-            updatedAt: new Date() 
-          } as AnalysisResult
-          
-          return {
-            analysisData: newAnalysisData
-          }
-        }),
-      
-      deleteResults: (ids) =>
-        set((state) => ({
-          analysisData: state.analysisData.filter(item => !ids.includes(item.id))
-        })),
-      
-      clearResults: () => set({ analysisData: [] }),
-      
-      // 分析状态
-      isAnalyzing: false,
-      currentProgress: 0,
-      totalItems: 0,
-      setAnalyzing: (status) => set({ isAnalyzing: status }),
-      setProgress: (current, total) => set({ currentProgress: current, totalItems: total }),
-      
-      // 后台任务管理
-      backgroundTasks: [],
-      addBackgroundTask: (taskId) =>
-        set((state) => {
-          // 限制后台任务数量，避免无限增长
-          const allTasks = [...state.backgroundTasks, taskId]
-          const limitedTasks = allTasks.length > 10 
-            ? allTasks.slice(-10) 
-            : allTasks
-          
-          return {
-            backgroundTasks: limitedTasks
-          }
-        }),
-      
-      removeBackgroundTask: (taskId) =>
-        set((state) => ({
-          backgroundTasks: state.backgroundTasks.filter(id => id !== taskId)
-        })),
-      
-      syncBackgroundTaskResults: async (taskId) => {
-        try {
-          console.log('开始同步后台任务结果:', taskId)
-          
-          const response = await fetch('/api/background-task', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'results',
-              taskId
-            })
-          })
-          
-          if (response.ok) {
-            const data = await response.json()
-            console.log('获取到后台任务数据:', data)
-            
-            const { addUrls, updateResult } = get()
-            const currentAnalysisData = get().analysisData
-            console.log('当前分析数据:', currentAnalysisData.map(item => ({ url: item.url, status: item.status })))
-            
-            // 将后台任务结果同步到前端状态
-            if (data.results && data.results.length > 0) {
-              console.log('同步成功结果:', data.results.length, '个')
-              
-              // 首先确保所有URL都已添加
-              const urls = data.results.map((result: any) => result.url)
-              addUrls(urls)
-              
-              // 等待一下，确保URL已添加
-              await new Promise(resolve => setTimeout(resolve, 100))
-              
-              // 获取最新的分析数据
-              const latestAnalysisData = get().analysisData
-              
-              // 更新每个URL的分析结果
-              data.results.forEach((result: any) => {
-                const existingItem = latestAnalysisData.find(item => item.url === result.url)
-                console.log(`更新结果 ${result.url}:`, existingItem ? '找到' : '未找到')
-                
-                if (existingItem) {
-                  updateResult(existingItem.id, {
-                    result: result.analyzeData?.result || 'PENDING',
-                    reason: result.analyzeData?.reason || '',
-                    status: 'completed',
-                    crawledContent: result.crawlData
-                  })
-                } else {
-                  console.warn('未找到URL对应的分析项:', result.url)
-                }
-              })
-            }
-            
-            // 处理错误结果
-            if (data.errors && data.errors.length > 0) {
-              console.log('同步错误结果:', data.errors.length, '个')
-              
-              // 首先确保所有URL都已添加
-              const errorUrls = data.errors.map((error: any) => error.url).filter(Boolean)
-              if (errorUrls.length > 0) {
-                addUrls(errorUrls)
-                await new Promise(resolve => setTimeout(resolve, 100))
-              }
-              
-              const latestAnalysisData = get().analysisData
-              
-              data.errors.forEach((error: any) => {
-                const existingItem = latestAnalysisData.find(item => item.url === error.url)
-                console.log(`更新错误 ${error.url}:`, existingItem ? '找到' : '未找到')
-                
-                if (existingItem) {
-                  updateResult(existingItem.id, {
-                    result: 'ERROR',
-                    reason: error.message,
-                    status: 'failed',
-                    error: error.message,
-                    errorDetails: {
-                      type: error.type || 'unknown_error',
-                      stage: error.stage || 'crawling',
-                      message: error.message,
-                      retryable: true
-                    }
-                  })
-                } else {
-                  console.warn('未找到错误URL对应的分析项:', error.url)
-                }
-              })
-            }
-            
-            console.log('后台任务结果同步完成')
-          } else {
-            console.error('获取后台任务结果失败:', response.status, response.statusText)
-          }
-        } catch (error) {
-          console.error('同步后台任务结果失败:', error)
-        }
-      }
+      updateConfig: (newConfig) => set((state) => ({
+        config: { ...state.config, ...newConfig }
+      })),
     }),
     {
-      name: 'analysis-store',
-      partialize: (state) => ({
-        config: state.config,
-        // 只保存最新的10000条分析数据，防止localStorage过大
-        analysisData: state.analysisData.slice(-10000),
-        // 只保存最新的5个后台任务
-        backgroundTasks: state.backgroundTasks.slice(-5)
-      }),
-      onRehydrateStorage: () => (state) => {
-        console.log('Rehydrating store:', state)
-        if (state?.config) {
-          console.log('Config loaded from storage:', state.config)
-        }
-        
-        // 清理过期数据
-        if (state?.analysisData) {
-          const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-          const filteredData = state.analysisData.filter(item => 
-            new Date(item.createdAt) > oneWeekAgo
-          )
-          if (filteredData.length !== state.analysisData.length) {
-            console.log(`清理了 ${state.analysisData.length - filteredData.length} 条过期数据`)
-            state.analysisData = filteredData
-          }
-        }
-      },
-      version: 2, // 增加版本号，触发migration
-      migrate: (persistedState: any, version: number) => {
-        console.log('Migrating store from version:', version)
-        
-        if (version < 2) {
-          // 清理旧版本的大数据
-          if (persistedState.analysisData && persistedState.analysisData.length > 10000) {
-            console.log('Migration: 清理过多的分析数据')
-            persistedState.analysisData = persistedState.analysisData.slice(-10000)
-          }
-          
-          if (persistedState.backgroundTasks && persistedState.backgroundTasks.length > 5) {
-            console.log('Migration: 清理过多的后台任务')
-            persistedState.backgroundTasks = persistedState.backgroundTasks.slice(-5)
-          }
-        }
-        
-        return persistedState
-      }
+      name: 'ai-analysis-config',  // 只存储配置
+      version: 1,
     }
   )
-) 
+)
+
+// 数据存储（服务端API）
+export const useAnalysisStore = create<DataState>((set, get) => ({
+  analysisData: [],
+  isAnalyzing: false,
+  currentProgress: 0,
+  totalItems: 0,
+  backgroundTasks: [],
+  currentPage: 1,
+  itemsPerPage: 100,
+  totalCount: 0,
+
+  setAnalyzing: (status) => set({ isAnalyzing: status }),
+  setProgress: (current, total) => set({ 
+    currentProgress: current, 
+    totalItems: total 
+  }),
+
+  setPage: (page) => {
+    set({ currentPage: page })
+    get().loadAnalysisData(page, get().itemsPerPage)
+  },
+
+  setItemsPerPage: (count) => {
+    set({ itemsPerPage: count, currentPage: 1 })
+    get().loadAnalysisData(1, count)
+  },
+
+  loadAnalysisData: async (page = 1, limit = 100) => {
+    try {
+      const response = await fetch(`/api/analysis-data?page=${page}&limit=${limit}`)
+      if (response.ok) {
+        const data = await response.json()
+        set({ 
+          analysisData: data.results || [],
+          totalCount: data.total || 0,
+          currentPage: page
+        })
+      }
+    } catch (error) {
+      console.error('Failed to load analysis data:', error)
+    }
+  },
+
+  getAllPendingUrls: async () => {
+    try {
+      const response = await fetch('/api/analysis-data/pending-urls')
+      if (response.ok) {
+        const data = await response.json()
+        return data.urls || []
+      }
+      return []
+    } catch (error) {
+      console.error('Failed to get all pending URLs:', error)
+      return []
+    }
+  },
+
+  addUrls: async (urls) => {
+    try {
+      const response = await fetch('/api/analysis-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls })
+      })
+      
+      if (response.ok) {
+        // 重新加载当前页数据
+        await get().loadAnalysisData(get().currentPage, get().itemsPerPage)
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Failed to add URLs:', error)
+      return false
+    }
+  },
+
+  updateResult: async (id, result) => {
+    try {
+      const response = await fetch(`/api/analysis-data/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(result)
+      })
+      
+      if (response.ok) {
+        // 更新本地状态
+        set((state) => ({
+          analysisData: state.analysisData.map(item =>
+            item.id === id ? { ...item, ...result, updatedAt: new Date() } : item
+          )
+        }))
+      }
+    } catch (error) {
+      console.error('Failed to update result:', error)
+    }
+  },
+
+  deleteResults: async (ids) => {
+    try {
+      const response = await fetch('/api/analysis-data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      })
+      
+      if (response.ok) {
+        await get().loadAnalysisData(get().currentPage, get().itemsPerPage)
+      }
+    } catch (error) {
+      console.error('Failed to delete results:', error)
+    }
+  },
+
+  clearResults: async () => {
+    try {
+      const response = await fetch('/api/analysis-data', {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        set({ analysisData: [], totalCount: 0 })
+      }
+    } catch (error) {
+      console.error('Failed to clear results:', error)
+    }
+  },
+
+  addBackgroundTask: (taskId) => set((state) => ({
+    backgroundTasks: [...state.backgroundTasks, taskId]
+  })),
+
+  removeBackgroundTask: (taskId) => set((state) => ({
+    backgroundTasks: state.backgroundTasks.filter(id => id !== taskId)
+  })),
+
+  syncBackgroundTaskResults: async (taskId) => {
+    try {
+      const response = await fetch(`/api/background-task/${taskId}/results`)
+      if (response.ok) {
+        await get().loadAnalysisData(get().currentPage, get().itemsPerPage)
+      }
+    } catch (error) {
+      console.error('Failed to sync background task results:', error)
+    }
+  },
+}))
+
+// 兼容性导出
+export const useStore = () => {
+  const configStore = useConfigStore()
+  const analysisStore = useAnalysisStore()
+  
+  return {
+    // 配置相关
+    config: configStore.config,
+    updateConfig: configStore.updateConfig,
+    
+    // 数据相关
+    analysisData: analysisStore.analysisData,
+    isAnalyzing: analysisStore.isAnalyzing,
+    currentProgress: analysisStore.currentProgress,
+    totalItems: analysisStore.totalItems,
+    backgroundTasks: analysisStore.backgroundTasks,
+    currentPage: analysisStore.currentPage,
+    itemsPerPage: analysisStore.itemsPerPage,
+    totalCount: analysisStore.totalCount,
+    
+    // 方法
+    loadAnalysisData: analysisStore.loadAnalysisData,
+    getAllPendingUrls: analysisStore.getAllPendingUrls,
+    addUrls: analysisStore.addUrls,
+    updateResult: analysisStore.updateResult,
+    deleteResults: analysisStore.deleteResults,
+    clearResults: analysisStore.clearResults,
+    setAnalyzing: analysisStore.setAnalyzing,
+    setProgress: analysisStore.setProgress,
+    setPage: analysisStore.setPage,
+    setItemsPerPage: analysisStore.setItemsPerPage,
+    addBackgroundTask: analysisStore.addBackgroundTask,
+    removeBackgroundTask: analysisStore.removeBackgroundTask,
+    syncBackgroundTaskResults: analysisStore.syncBackgroundTaskResults,
+  }
+} 

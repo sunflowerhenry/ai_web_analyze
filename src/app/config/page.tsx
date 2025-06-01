@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Settings, TestTube, Save, Eye, EyeOff, CheckCircle, XCircle, ArrowLeft, Bookmark, BookmarkCheck, Trash2, RefreshCw, Wifi, Zap, Shield, UserCheck, Clock } from 'lucide-react'
-import { useAnalysisStore, type AIConfig } from '@/store/analysis-store'
+import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+import { Settings, TestTube, Save, Eye, EyeOff, CheckCircle, XCircle, ArrowLeft, Bookmark, BookmarkCheck, Trash2, RefreshCw, Wifi, Zap, Shield, UserCheck, Clock, AlertTriangle, Globe, Loader2 } from 'lucide-react'
+import { useStore, type AIConfig, type ProxyConfig, type ProxySettings, type ConcurrencySettings, type AntiDetectionSettings } from '@/store/analysis-store'
 import { toast } from 'sonner'
 import axios from 'axios'
 import { useRouter } from 'next/navigation'
@@ -34,39 +36,45 @@ interface SavedPrompt {
   createdAt: string
 }
 
+// 添加默认配置
+const defaultConfig: AIConfig = {
+  modelName: 'gpt-3.5-turbo',
+  apiUrl: 'https://api.openai.com/v1/chat/completions',
+  apiKey: '',
+  proxySettings: {
+    enabled: false,
+    proxies: [],
+    strategy: 'round-robin',
+    maxConcurrentProxies: 3,
+    testUrl: 'https://httpbin.org/ip'
+  },
+  concurrencySettings: {
+    enabled: false,
+    maxConcurrent: 3,
+    delayBetweenRequests: 2000,
+    retryAttempts: 2
+  },
+  antiDetectionSettings: {
+    enabled: true,
+    useHeadlessBrowser: false,
+    randomUserAgent: true,
+    randomDelay: true,
+    minDelay: 1000,
+    maxDelay: 3000
+  },
+  promptTemplate: '您的提示模板...',
+  companyNamePrompt: '您的公司名称提示...',
+  emailCrawlPrompt: '您的邮箱爬取提示...'
+}
+
 export default function ConfigPage() {
   const router = useRouter()
-  const { config, updateConfig } = useAnalysisStore()
+  const { config, updateConfig } = useStore()
   const [formData, setFormData] = useState<AIConfig>(() => {
     // 使用函数式初始化，确保有完整的默认配置
     return {
-      modelName: 'gpt-3.5-turbo',
-      apiUrl: 'https://api.openai.com/v1/chat/completions',
-      apiKey: '',
-      promptTemplate: '',
-      companyNamePrompt: '',
-      emailCrawlPrompt: '',
-      proxySettings: {
-        enabled: false,
-        proxies: [],
-        strategy: 'round-robin',
-        maxConcurrentProxies: 3,
-        testUrl: 'https://httpbin.org/ip'
-      },
-      concurrencySettings: {
-        enabled: false,
-        maxConcurrent: 3,
-        delayBetweenRequests: 2000,
-        retryAttempts: 2
-      },
-      antiDetectionSettings: {
-        enabled: true,
-        useHeadlessBrowser: false,
-        randomUserAgent: true,
-        randomDelay: true,
-        minDelay: 1000,
-        maxDelay: 3000
-      }
+      ...defaultConfig,
+      ...config
     }
   })
   const [showApiKey, setShowApiKey] = useState(false)
@@ -888,7 +896,11 @@ export default function ConfigPage() {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-green-500 mt-1">•</span>
-                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">api.openai.com/v1/chat/completions</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          api.openai.com/v1/chat/completions
+                        </div>
+                      </div>
                     </li>
                   </ul>
                 </div>
@@ -911,7 +923,11 @@ export default function ConfigPage() {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-blue-500 mt-1">•</span>
-                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">api.deepseek.com/v1/chat/completions</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          api.deepseek.com/v1/chat/completions
+                        </div>
+                      </div>
                     </li>
                   </ul>
                 </div>
@@ -934,7 +950,92 @@ export default function ConfigPage() {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-purple-500 mt-1">•</span>
-                      <span className="font-mono text-xs bg-gray-100 px-1 rounded">openrouter.ai/api/v1/chat/completions</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          openrouter.ai/api/v1/chat/completions
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-orange-100 rounded-full flex items-center justify-center">
+                      🟠
+                    </div>
+                    <h4 className="font-semibold text-orange-700">Claude API</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-orange-500 mt-1">•</span>
+                      <span>Anthropic Claude模型</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-orange-500 mt-1">•</span>
+                      <span>支持Claude-3、Claude-3.5-Sonnet</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-orange-500 mt-1">•</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          api.anthropic.com/v1/messages
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center">
+                      🔴
+                    </div>
+                    <h4 className="font-semibold text-red-700">自定义API</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-red-500 mt-1">•</span>
+                      <span>支持任何兼容OpenAI格式的API</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-red-500 mt-1">•</span>
+                      <span>本地部署的模型（如Ollama）</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-red-500 mt-1">•</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          your-api-endpoint/v1/chat/completions
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 bg-cyan-100 rounded-full flex items-center justify-center">
+                      🔷
+                    </div>
+                    <h4 className="font-semibold text-cyan-700">Azure OpenAI</h4>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="text-cyan-500 mt-1">•</span>
+                      <span>微软Azure上的OpenAI服务</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-cyan-500 mt-1">•</span>
+                      <span>企业级安全和合规性</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-cyan-500 mt-1">•</span>
+                      <div className="flex-1">
+                        <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded break-all">
+                          your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions?api-version=2024-02-15-preview
+                        </div>
+                      </div>
                     </li>
                   </ul>
                 </div>

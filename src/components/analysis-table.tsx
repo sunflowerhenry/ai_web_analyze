@@ -29,9 +29,11 @@ import {
   ArrowUpDown,
   Eye,
   EyeOff,
-  PlayCircle
+  PlayCircle,
+  ChevronLeft,
+  ChevronRight as ChevronRightIcon
 } from 'lucide-react'
-import { useAnalysisStore, type AnalysisResult } from '@/store/analysis-store'
+import { useStore, type AnalysisResult } from '@/store/analysis-store'
 import { toast } from 'sonner'
 import axios from 'axios'
 import * as XLSX from 'xlsx'
@@ -46,8 +48,14 @@ export function AnalysisTable() {
     isAnalyzing, 
     setAnalyzing, 
     setProgress,
-    config 
-  } = useAnalysisStore()
+    config,
+    currentPage,
+    itemsPerPage,
+    totalCount,
+    setPage,
+    loadAnalysisData,
+    getAllPendingUrls
+  } = useStore()
   
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set())
@@ -66,27 +74,159 @@ export function AnalysisTable() {
     currentUrl: '',
     stage: '' // 'crawling', 'analyzing', 'info-crawling'
   })
+
+  // 新增：后台任务监控状态
+  const [backgroundTask, setBackgroundTask] = useState<{
+    taskId: string | null,
+    isMonitoring: boolean,
+    status: 'pending' | 'running' | 'completed' | 'failed' | null,
+    progress: { current: number; total: number },
+    summary?: {
+      total: number,
+      completed: number,
+      failed: number,
+      remaining: number
+    }
+  }>({
+    taskId: null,
+    isMonitoring: false,
+    status: null,
+    progress: { current: 0, total: 0 },
+    summary: undefined
+  })
+
+  const backgroundMonitorRef = useRef<NodeJS.Timeout | null>(null)
   
-  // 筛选和排序状态
+  // 筛选和排序状态（本地筛选）
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterResult, setFilterResult] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
-  // 移除排序功能 - 注释掉 sortBy 和 sortOrder 相关状态
-  // const [sortBy, setSortBy] = useState<string>('createdAt')
-  // const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   
-  // 分页状态
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize] = useState(100) // 固定为100，移除setPageSize
   const [showTableSettings, setShowTableSettings] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   // 同步停止状态到 ref
   useEffect(() => {
     stopRequestedRef.current = isStopRequested
   }, [isStopRequested])
 
-  // 筛选后的数据 - 移除排序功能
-  const filteredAndSortedData = useMemo(() => {
+  // 后台任务监控
+  const startBackgroundTaskMonitoring = (taskId: string) => {
+    if (backgroundMonitorRef.current) {
+      clearInterval(backgroundMonitorRef.current)
+    }
+
+    setBackgroundTask(prev => ({
+      ...prev,
+      taskId,
+      isMonitoring: true
+    }))
+
+    backgroundMonitorRef.current = setInterval(async () => {
+      try {
+        const response = await fetch('/api/background-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'realtime-status',
+            taskId
+          })
+        })
+        
+        if (response.ok) {
+          const data = await response.json()
+          
+          setBackgroundTask(prev => ({
+            ...prev,
+            status: data.status,
+            progress: data.progress,
+            summary: data.summary
+          }))
+          
+          if (data.status === 'completed' || data.status === 'failed') {
+            clearInterval(backgroundMonitorRef.current!)
+            backgroundMonitorRef.current = null
+            
+            setBackgroundTask(prev => ({
+              ...prev,
+              isMonitoring: false
+            }))
+            
+            // 刷新数据
+            await loadAnalysisData(currentPage, itemsPerPage)
+            
+            if (data.status === 'completed') {
+              toast.success(`后台任务已完成！处理了 ${data.summary.completed} 个网站`)
+            } else {
+              toast.error('后台任务失败')
+            }
+          }
+        }
+      } catch (error) {
+        console.error('监控后台任务失败:', error)
+      }
+    }, 3000) // 每3秒检查一次
+  }
+
+  // 停止后台任务监控
+  const stopBackgroundTaskMonitoring = () => {
+    if (backgroundMonitorRef.current) {
+      clearInterval(backgroundMonitorRef.current)
+      backgroundMonitorRef.current = null
+    }
+    
+    setBackgroundTask({
+      taskId: null,
+      isMonitoring: false,
+      status: null,
+      progress: { current: 0, total: 0 },
+      summary: undefined
+    })
+  }
+
+  // 清理监控
+  useEffect(() => {
+    return () => {
+      if (backgroundMonitorRef.current) {
+        clearInterval(backgroundMonitorRef.current)
+      }
+    }
+  }, [])
+
+  // 检查并恢复正在运行的后台任务
+  useEffect(() => {
+    const checkRunningBackgroundTasks = async () => {
+      try {
+        const response = await fetch('/api/background-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'list' })
+        })
+        
+        if (response.ok) {
+          const data = await response.json()
+          const runningTask = data.tasks.find((task: any) => 
+            task.status === 'running' || task.status === 'pending'
+          )
+          
+          if (runningTask) {
+            toast.info('发现正在运行的后台任务，已自动恢复监控')
+            startBackgroundTaskMonitoring(runningTask.id)
+          }
+        }
+      } catch (error) {
+        console.error('检查后台任务失败:', error)
+      }
+    }
+    
+    // 延迟1秒后检查，确保页面加载完成
+    const timer = setTimeout(checkRunningBackgroundTasks, 1000)
+    
+    return () => clearTimeout(timer)
+  }, [])
+
+  // 筛选后的数据（本地筛选）
+  const filteredData = useMemo(() => {
     let filtered = analysisData
     
     // 搜索筛选
@@ -108,22 +248,25 @@ export function AnalysisTable() {
       filtered = filtered.filter(item => item.result === filterResult)
     }
     
-    // 移除排序功能 - 保持原始顺序
     return filtered
   }, [analysisData, filterStatus, filterResult, searchQuery])
 
-  // 当筛选条件改变时重置页码到第一页 - 移除排序依赖
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [filterStatus, filterResult, searchQuery])
+  // 分页计算
+  const totalPages = Math.ceil(totalCount / itemsPerPage)
+  const hasLocalFilter = filterStatus !== 'all' || filterResult !== 'all' || searchQuery.trim() !== ''
 
-  // 分页数据
-  const paginatedData = useMemo(() => {
-    const startIndex = (currentPage - 1) * pageSize
-    return filteredAndSortedData.slice(startIndex, startIndex + pageSize)
-  }, [filteredAndSortedData, currentPage, pageSize])
-
-  const totalPages = Math.ceil(filteredAndSortedData.length / pageSize)
+  // 刷新数据
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    try {
+      await loadAnalysisData(currentPage, itemsPerPage)
+      toast.success('数据已刷新')
+    } catch (error) {
+      toast.error('刷新数据失败')
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
 
   // 检查是否可以开始分析
   const canStartAnalysis = analysisData.some(item => 
@@ -165,10 +308,11 @@ export function AnalysisTable() {
     }
   }
 
-  // 全选/取消全选
+  // 全选/取消全选（当前页）
   const handleSelectAll = (checked: boolean) => {
+    const displayData = hasLocalFilter ? filteredData : analysisData
     if (checked) {
-      setSelectedIds(paginatedData.map(item => item.id))
+      setSelectedIds(displayData.map(item => item.id))
     } else {
       setSelectedIds([])
     }
@@ -184,38 +328,48 @@ export function AnalysisTable() {
   }
 
   // 删除选中项
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (selectedIds.length === 0) {
       toast.error('请先选择要删除的项目')
       return
     }
     
-    deleteResults(selectedIds)
-    setSelectedIds([])
-    toast.success(`已删除 ${selectedIds.length} 个项目`)
+    try {
+      await deleteResults(selectedIds)
+      setSelectedIds([])
+      toast.success(`已删除 ${selectedIds.length} 个项目`)
+      // 重新加载当前页数据
+      await loadAnalysisData(currentPage, itemsPerPage)
+    } catch (error) {
+      toast.error('删除失败，请重试')
+    }
   }
 
   // 清空所有数据
-  const handleClearAll = () => {
-    if (analysisData.length === 0) {
-      toast.error('没有数据可清空')
+  const handleClearAll = async () => {
+    if (totalCount === 0) {
+      toast.error('没有数据可以清空')
       return
     }
     
-    clearResults()
-    setSelectedIds([])
-    toast.success('已清空所有数据')
+    try {
+      await clearResults()
+      setSelectedIds([])
+      toast.success('所有数据已清空')
+    } catch (error) {
+      toast.error('清空失败，请重试')
+    }
   }
 
-  // 复制表格数据
+  // 复制所有数据
   const handleCopyData = () => {
-    if (filteredAndSortedData.length === 0) {
+    if (filteredData.length === 0) {
       toast.error('没有数据可复制')
       return
     }
 
     const headers = ['网站链接', '判断结果', '判断依据', '公司信息', '邮箱信息', '分析状态']
-    const rows = filteredAndSortedData.map(item => [
+    const rows = filteredData.map(item => [
       item.url,
       item.result === 'Y' ? '是' : item.result === 'N' ? '否' : item.result,
       item.reason || '',
@@ -229,7 +383,37 @@ export function AnalysisTable() {
       .join('\n')
 
     navigator.clipboard.writeText(csvContent).then(() => {
-      toast.success('数据已复制到剪贴板')
+      toast.success('所有数据已复制到剪贴板')
+    }).catch(() => {
+      toast.error('复制失败')
+    })
+  }
+
+  // 复制选中的数据
+  const handleCopySelected = () => {
+    if (selectedIds.length === 0) {
+      toast.error('请先选择要复制的项目')
+      return
+    }
+
+    const selectedData = filteredData.filter(item => selectedIds.includes(item.id))
+    
+    const headers = ['网站链接', '判断结果', '判断依据', '公司信息', '邮箱信息', '分析状态']
+    const rows = selectedData.map(item => [
+      item.url,
+      item.result === 'Y' ? '是' : item.result === 'N' ? '否' : item.result,
+      item.reason || '',
+      formatCompanyInfo(item.companyInfo),
+      formatEmails(item.emails),
+      getStatusText(item.status)
+    ])
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join('\t'))
+      .join('\n')
+
+    navigator.clipboard.writeText(csvContent).then(() => {
+      toast.success(`已复制 ${selectedData.length} 条选中数据到剪贴板`)
     }).catch(() => {
       toast.error('复制失败')
     })
@@ -237,13 +421,13 @@ export function AnalysisTable() {
 
   // 导出数据
   const handleExport = (format: 'excel' | 'csv' | 'json') => {
-    if (filteredAndSortedData.length === 0) {
+    if (filteredData.length === 0) {
       toast.error('没有数据可导出')
       return
     }
 
     try {
-      const dataToExport = filteredAndSortedData.map(item => ({
+      const dataToExport = filteredData.map(item => ({
         网站地址: item.url,
         分析结果: item.result === 'Y' ? '是' : item.result === 'N' ? '否' : item.result,
         判断依据: item.reason || '',
@@ -322,14 +506,15 @@ export function AnalysisTable() {
     }
   }
 
-  // 开始分析（支持并发）
+  // 开始分析（支持后台任务）
   const handleStartAnalysis = async () => {
     if (!config.apiKey) {
       toast.error('请先配置AI API密钥')
       return
     }
 
-    const pendingItems = analysisData.filter(item => 
+    // 先从当前页数据检查是否有待分析项目
+    const currentPagePendingItems = analysisData.filter(item => 
       item.status === 'waiting' || 
       item.status === 'failed' || 
       item.status === 'crawl-failed' || 
@@ -337,16 +522,66 @@ export function AnalysisTable() {
       item.status === 'info-crawl-failed'
     )
 
-    if (pendingItems.length === 0) {
-      toast.error('没有待分析的项目')
+    if (currentPagePendingItems.length === 0) {
+      toast.error('当前页没有待分析的项目')
       return
     }
 
+    try {
+      // 从服务端获取所有待处理的URL
+      const allPendingUrls = await getAllPendingUrls()
+
+      if (allPendingUrls.length === 0) {
+        toast.error('没有待分析的项目')
+        return
+      }
+
+      // 检查是否要使用后台任务（超过50个URL）
+      if (allPendingUrls.length > 50) {
+        try {
+          // 创建后台任务
+          const response = await fetch('/api/background-task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'create',
+              type: 'analyze',
+              urls: allPendingUrls,
+              config: config
+            })
+          })
+
+          if (response.ok) {
+            const data = await response.json()
+            
+            toast.success(`已创建后台任务，将处理 ${allPendingUrls.length} 个网站，即使关闭网页也会继续运行！任务ID: ${data.taskId.substring(0, 8)}`)
+            
+            // 开始监控后台任务
+            startBackgroundTaskMonitoring(data.taskId)
+            
+            return
+          } else {
+            throw new Error('创建后台任务失败')
+          }
+        } catch (error) {
+          console.error('创建后台任务失败:', error)
+          toast.error('创建后台任务失败，将使用前台分析')
+          // 继续使用前台分析（使用当前页数据）
+        }
+      }
+
+    } catch (error) {
+      console.error('获取待处理数据失败:', error)
+      toast.error('获取待处理数据失败，将使用当前页数据进行分析')
+    }
+
+    // 前台分析逻辑（使用当前页数据）
+    const pendingItems = currentPagePendingItems
     const controllers: AbortController[] = []
     setCurrentAnalysisControllers(controllers)
     setAnalyzing(true)
     setIsStopRequested(false)
-    stopRequestedRef.current = false  // 确保重置停止状态
+    stopRequestedRef.current = false
     setProgress(0, pendingItems.length)
 
     // 初始化进度监控
@@ -359,150 +594,102 @@ export function AnalysisTable() {
     })
 
     try {
-      // 检查是否启用并发
       const concurrency = config.concurrencySettings?.enabled ? 
-        (config.concurrencySettings?.maxConcurrent || 3) : 1
-
+        config.concurrencySettings.maxConcurrent : 1
+      
       let completed = 0
-
-      // 分批处理
+      
       for (let i = 0; i < pendingItems.length; i += concurrency) {
         if (stopRequestedRef.current) {
-          console.log('Analysis stopped by user request')
+          console.log('Analysis stop requested, breaking loop')
           break
         }
 
-        const batch = pendingItems.slice(i, i + concurrency)
+        const batch = pendingItems.slice(i, Math.min(i + concurrency, pendingItems.length))
         
-        // 并发处理当前批次
         const batchPromises = batch.map(async (item) => {
           if (stopRequestedRef.current) {
-            console.log(`Skipping ${item.url} due to stop request`)
             return
           }
 
           const controller = new AbortController()
           controllers.push(controller)
-
+          
           try {
-            // 检查停止状态
-            if (stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              return
-            }
-
-            // 更新当前处理URL和阶段
-            setAnalysisProgress(prev => ({
-              ...prev,
-              currentUrl: item.url,
-              stage: 'crawling'
+            setAnalysisProgress(prev => ({ 
+              ...prev, 
+              currentUrl: item.url, 
+              stage: 'crawling' 
             }))
-
-            // 更新状态为爬取中
+            
             updateResult(item.id, { status: 'crawling' })
-
-            // 爬取网站内容（增强版）
-            const crawlResponse = await axios.post('/api/crawl-enhanced', { 
+            
+            const crawlResponse = await axios.post('/api/crawl', {
               url: item.url,
-              proxySettings: config.proxySettings,
-              antiDetectionSettings: config.antiDetectionSettings
+              config: config
             }, {
               signal: controller.signal,
-              timeout: 60000
+              timeout: 30000
             })
-            
-            // 再次检查停止状态
-            if (stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              return
-            }
-            
-            if (crawlResponse.data.error) {
+
+            if (stopRequestedRef.current) return
+
+            if (crawlResponse.data.success) {
+              setAnalysisProgress(prev => ({ 
+                ...prev, 
+                currentUrl: item.url, 
+                stage: 'analyzing' 
+              }))
+              
               updateResult(item.id, { 
-                status: 'crawl-failed', 
-                result: 'ERROR',
-                reason: crawlResponse.data.error,
-                error: crawlResponse.data.error
+                status: 'analyzing',
+                crawledContent: { content: crawlResponse.data.content }
               })
-              completed++
-              setAnalysisProgress(prev => ({ ...prev, current: completed }))
-              return
+
+              const analysisResponse = await axios.post('/api/analyze', {
+                url: item.url,
+                content: crawlResponse.data.content,
+                config: config
+              }, {
+                signal: controller.signal,
+                timeout: 60000
+              })
+
+              if (stopRequestedRef.current) return
+
+              if (analysisResponse.data.success) {
+                updateResult(item.id, {
+                  status: 'completed',
+                  result: analysisResponse.data.result,
+                  reason: analysisResponse.data.reason,
+                  crawledContent: { content: crawlResponse.data.content }
+                })
+              } else {
+                updateResult(item.id, { 
+                  status: 'analysis-failed',
+                  error: analysisResponse.data.error,
+                  crawledContent: { content: crawlResponse.data.content }
+                })
+              }
+            } else {
+              updateResult(item.id, { 
+                status: 'crawl-failed',
+                error: crawlResponse.data.error 
+              })
             }
-
-            // 检查停止状态
-            if (stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              return
-            }
-
-            // 更新阶段为分析中
-            setAnalysisProgress(prev => ({
-              ...prev,
-              stage: 'analyzing'
-            }))
-
-            // 更新状态为分析中
-            updateResult(item.id, { 
-              status: 'analyzing',
-              crawledContent: crawlResponse.data
-            })
-
-            // 使用AI分析是否为目标客户
-            const analysisResponse = await axios.post('/api/analyze', {
-              config,
-              crawledContent: crawlResponse.data
-            }, {
-              signal: controller.signal,
-              timeout: 30000
-            })
-
-            // 再次检查停止状态
-            if (stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              return
-            }
-
-            // 使用AI提取公司信息
-            const companyInfoResponse = await axios.post('/api/extract-company-info', {
-              content: crawlResponse.data.content,
-              config
-            }, {
-              signal: controller.signal,
-              timeout: 30000
-            })
-
-            // 最后检查停止状态
-            if (stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              return
-            }
-
-            // 更新分析结果
-            updateResult(item.id, {
-              status: 'completed',
-              result: analysisResponse.data.result,
-              reason: analysisResponse.data.reason,
-              companyInfo: companyInfoResponse.data.companyInfo,
-              hasInfoCrawled: false
-            })
-
-            completed++
-            setAnalysisProgress(prev => ({ ...prev, current: completed }))
 
           } catch (error) {
-            if (axios.isCancel(error) || stopRequestedRef.current) {
-              updateResult(item.id, { status: 'waiting' })
-              console.log(`Analysis cancelled for ${item.url}`)
-              return
+            if (!stopRequestedRef.current) {
+              if (axios.isCancel(error)) {
+                updateResult(item.id, { status: 'waiting' })
+              } else {
+                updateResult(item.id, { 
+                  status: 'failed',
+                  error: error instanceof Error ? error.message : '未知错误'
+                })
+              }
             }
-
-            updateResult(item.id, {
-              status: 'analysis-failed',
-              result: 'ERROR',
-              reason: '分析过程中发生错误',
-              error: error instanceof Error ? error.message : '未知错误'
-            })
-            
+          } finally {
             completed++
             setAnalysisProgress(prev => ({ ...prev, current: completed }))
           }
@@ -511,7 +698,6 @@ export function AnalysisTable() {
         await Promise.all(batchPromises)
         setProgress(Math.min(i + concurrency, pendingItems.length), pendingItems.length)
         
-        // 批次间延迟，但要检查停止状态
         if (i + concurrency < pendingItems.length && !stopRequestedRef.current) {
           const delay = config.concurrencySettings?.delayBetweenRequests || 1000
           await new Promise(resolve => setTimeout(resolve, delay))
@@ -533,7 +719,6 @@ export function AnalysisTable() {
       stopRequestedRef.current = false
       setCurrentAnalysisControllers([])
       
-      // 结束进度监控
       setAnalysisProgress({
         current: 0,
         total: 0,
@@ -566,11 +751,37 @@ export function AnalysisTable() {
       }
     })
     
-    // 立即停止分析状态
     setAnalyzing(false)
     setCurrentAnalysisControllers([])
     
     toast.success('已停止分析')
+  }
+
+  // 停止后台任务
+  const handleStopBackgroundTask = async () => {
+    if (!backgroundTask.taskId) return
+
+    try {
+      const response = await fetch('/api/background-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cancel',
+          taskId: backgroundTask.taskId
+        })
+      })
+
+      if (response.ok) {
+        toast.success('后台任务已取消')
+        stopBackgroundTaskMonitoring()
+        await loadAnalysisData(currentPage, itemsPerPage)
+      } else {
+        toast.error('取消后台任务失败')
+      }
+    } catch (error) {
+      toast.error('取消后台任务失败')
+      console.error('取消后台任务失败:', error)
+    }
   }
 
   // 爬取单个网站的详细信息
@@ -844,6 +1055,130 @@ export function AnalysisTable() {
     }
   }
 
+  // 爬取选中项目的邮箱信息
+  const handleCrawlSelectedEmails = async () => {
+    if (selectedIds.length === 0) {
+      toast.error('请先选择要爬取邮箱的项目')
+      return
+    }
+
+    // 筛选出可以爬取邮箱的项目（去掉Y/N限制）
+    const selectedItems = analysisData.filter(item => 
+      selectedIds.includes(item.id) && 
+      !item.hasInfoCrawled &&
+      item.status === 'completed'
+    )
+
+    if (selectedItems.length === 0) {
+      toast.error('选中的项目中没有可以爬取邮箱的网站（需要是未爬取过信息的已完成项目）')
+      return
+    }
+
+    if (!config.apiKey) {
+      toast.error('请先配置AI API密钥')
+      return
+    }
+
+    const controllers: AbortController[] = []
+    setCurrentAnalysisControllers(controllers)
+    setAnalyzing(true)
+    setIsStopRequested(false)
+    stopRequestedRef.current = false
+
+    // 初始化进度监控
+    setAnalysisProgress({
+      current: 0,
+      total: selectedItems.length,
+      isActive: true,
+      currentUrl: '',
+      stage: 'preparing'
+    })
+
+    try {
+      const concurrency = config.concurrencySettings?.enabled ? 
+        (config.concurrencySettings?.maxConcurrent || 3) : 1
+
+      let completed = 0
+
+      for (let i = 0; i < selectedItems.length; i += concurrency) {
+        if (stopRequestedRef.current) {
+          console.log('Selected info crawling stopped by user request')
+          break
+        }
+
+        const batch = selectedItems.slice(i, i + concurrency)
+        
+        const batchPromises = batch.map(async (item) => {
+          if (stopRequestedRef.current) {
+            console.log(`Skipping selected info crawling for ${item.url} due to stop request`)
+            return
+          }
+
+          const controller = new AbortController()
+          controllers.push(controller)
+
+          try {
+            // 更新当前处理的URL和阶段
+            setAnalysisProgress(prev => ({
+              ...prev,
+              currentUrl: item.url,
+              stage: 'info-crawling'
+            }))
+            
+            await handleCrawlCompanyInfo(item.id, item.url, controller)
+            
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
+          } catch (error) {
+            if (!stopRequestedRef.current) {
+              console.error('Crawl selected info error:', error)
+            }
+            completed++
+            setAnalysisProgress(prev => ({ ...prev, current: completed }))
+          }
+        })
+
+        await Promise.all(batchPromises)
+        
+        if (i + concurrency < selectedItems.length && !stopRequestedRef.current) {
+          const delay = config.concurrencySettings?.delayBetweenRequests || 1000
+          await new Promise(resolve => setTimeout(resolve, delay))
+        }
+      }
+
+      if (!stopRequestedRef.current) {
+        toast.success(`已完成 ${selectedItems.length} 个选中网站的邮箱爬取`)
+        setSelectedIds([]) // 清空选择
+      } else {
+        toast.info('选中邮箱爬取已停止')
+      }
+    } catch (error) {
+      if (!stopRequestedRef.current) {
+        toast.error('批量爬取选中项目失败')
+      }
+    } finally {
+      setAnalyzing(false)
+      setIsStopRequested(false)
+      stopRequestedRef.current = false
+      setCurrentAnalysisControllers([])
+      
+      // 结束进度监控
+      setAnalysisProgress({
+        current: 0,
+        total: 0,
+        isActive: false,
+        currentUrl: '',
+        stage: ''
+      })
+    }
+  }
+
+  // 检查是否可以爬取选中项目的邮箱（去掉Y/N限制）
+  const canCrawlSelectedEmails = selectedIds.some(id => {
+    const item = analysisData.find(item => item.id === id)
+    return item && !item.hasInfoCrawled && item.status === 'completed'
+  })
+
   return (
     <Card>
       <CardHeader>
@@ -879,16 +1214,78 @@ export function AnalysisTable() {
           </div>
         )}
 
-        {/* 标题和控制区域 */}
+        {/* 后台任务监控区域 */}
+        {backgroundTask.isMonitoring && (
+          <div className="mb-4 p-3 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  {backgroundTask.status === 'running' ? (
+                    <Loader2 className="h-5 w-5 text-green-600 animate-spin" />
+                  ) : backgroundTask.status === 'completed' ? (
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                  ) : backgroundTask.status === 'failed' ? (
+                    <XCircle className="h-5 w-5 text-red-600" />
+                  ) : (
+                    <Clock className="h-5 w-5 text-orange-600" />
+                  )}
+                  <div>
+                    <div className="text-sm font-medium text-green-900">
+                      后台任务 - {backgroundTask.status === 'running' ? '运行中' : 
+                                 backgroundTask.status === 'completed' ? '已完成' :
+                                 backgroundTask.status === 'failed' ? '失败' : '等待中'}
+                    </div>
+                    <div className="text-xs text-green-700">
+                      任务ID: {backgroundTask.taskId?.substring(0, 8)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex-1 max-w-md mx-4">
+                <Progress 
+                  value={backgroundTask.progress.total > 0 ? (backgroundTask.progress.current / backgroundTask.progress.total) * 100 : 0} 
+                  className="h-2"
+                />
+              </div>
+              
+              <div className="flex items-center gap-3">
+                {backgroundTask.summary && (
+                  <div className="text-xs text-green-600">
+                    完成: {backgroundTask.summary.completed} | 失败: {backgroundTask.summary.failed} | 剩余: {backgroundTask.summary.remaining}
+                  </div>
+                )}
+                
+                {backgroundTask.status === 'running' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleStopBackgroundTask}
+                    className="h-6 text-xs border-red-200 text-red-600 hover:bg-red-50"
+                  >
+                    <StopCircle className="h-3 w-3 mr-1" />
+                    取消
+                  </Button>
+                )}
+              </div>
+            </div>
+            
+            <div className="mt-2 text-xs text-green-600">
+              💡 提示：后台任务会持续运行，即使关闭网页也不会中断
+            </div>
+          </div>
+        )}
+
+        {/* 表格标题和操作按钮区域 */}
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            <Building className="h-5 w-5" />
+            <Building className="h-5 w-5 text-blue-600" />
             分析结果
-            <Badge variant="outline">
-              {filteredAndSortedData.length} / {analysisData.length} 个网站
+            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+              {filteredData.length} / {totalCount} 个网站
             </Badge>
             {(filterStatus !== 'all' || filterResult !== 'all' || searchQuery.trim()) && (
-              <Badge variant="secondary" className="text-xs">
+              <Badge variant="secondary" className="text-xs bg-orange-50 text-orange-700 border-orange-200">
                 <Filter className="h-3 w-3 mr-1" />
                 已筛选
               </Badge>
@@ -897,34 +1294,37 @@ export function AnalysisTable() {
           
           {/* 操作按钮区域 */}
           <div className="flex items-center gap-2">
-            {/* 操作按钮 */}
+            {/* 分析控制按钮 */}
             {isAnalyzing ? (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
                 <Button
                   variant="destructive"
                   size="sm"
                   onClick={handleStopAnalysis}
+                  className="shadow-sm"
                 >
                   <StopCircle className="h-4 w-4 mr-1" />
-                  停止
+                  停止分析
                 </Button>
                 
                 <Button
                   variant="destructive"
                   size="sm"
                   onClick={handleStopAllAnalysis}
+                  className="shadow-sm"
                 >
                   <StopCircle className="h-4 w-4 mr-1" />
                   强制停止
                 </Button>
               </div>
             ) : (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
                 <Button
                   variant="default"
                   size="sm"
                   onClick={handleStartAnalysis}
                   disabled={!canStartAnalysis}
+                  className="bg-blue-600 hover:bg-blue-700 shadow-sm"
                 >
                   <Play className="h-4 w-4 mr-1" />
                   开始分析
@@ -935,9 +1335,21 @@ export function AnalysisTable() {
                   size="sm"
                   onClick={handleCrawlAllYResults}
                   disabled={!canCrawlAll}
+                  className="shadow-sm"
                 >
                   <PlayCircle className="h-4 w-4 mr-1" />
                   爬取信息
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCrawlSelectedEmails}
+                  disabled={!canCrawlSelectedEmails}
+                  className="shadow-sm border-purple-200 text-purple-600 hover:bg-purple-50"
+                >
+                  <Mail className="h-4 w-4 mr-1" />
+                  爬取选中
                 </Button>
               </div>
             )}
@@ -945,21 +1357,21 @@ export function AnalysisTable() {
         </div>
 
         {/* 搜索和筛选区域 */}
-        <div className="flex items-center justify-between mt-4">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between mt-6">
+          <div className="flex items-center gap-3">
             {/* 搜索框 */}
             <Input
               placeholder="搜索网站地址、公司名称..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-64"
+              className="w-64 shadow-sm"
             />
 
             {/* 筛选控制 */}
-            <div className="flex items-center gap-2 border rounded-lg p-2 bg-gray-50">
+            <div className="flex items-center gap-2 border rounded-lg p-2 bg-white shadow-sm">
               <Filter className="h-4 w-4 text-gray-500" />
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-28 h-8 border-0 bg-transparent">
+                <SelectTrigger className="w-32 h-8 border-0 bg-transparent">
                   <SelectValue placeholder="状态" />
                 </SelectTrigger>
                 <SelectContent>
@@ -977,7 +1389,7 @@ export function AnalysisTable() {
               </Select>
 
               <Select value={filterResult} onValueChange={setFilterResult}>
-                <SelectTrigger className="w-28 h-8 border-0 bg-transparent">
+                <SelectTrigger className="w-32 h-8 border-0 bg-transparent">
                   <SelectValue placeholder="结果" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1008,23 +1420,49 @@ export function AnalysisTable() {
 
           {/* 功能按钮区域 */}
           <div className="flex items-center gap-2">
+            {/* 刷新按钮 */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="shadow-sm"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </Button>
+
             {/* 表格设置 */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setShowTableSettings(!showTableSettings)}
+              className="shadow-sm"
             >
               <Settings className="h-4 w-4" />
             </Button>
 
+            {/* 复制选中按钮 */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCopySelected}
+              disabled={selectedIds.length === 0}
+              className="shadow-sm border-blue-200 text-blue-600 hover:bg-blue-50"
+            >
+              <Copy className="h-4 w-4 mr-1" />
+              复制选中
+            </Button>
+
+            {/* 复制全部按钮 */}
             <Button
               variant="outline"
               size="sm"
               onClick={handleCopyData}
-              disabled={filteredAndSortedData.length === 0}
+              disabled={filteredData.length === 0}
+              className="shadow-sm"
             >
               <Copy className="h-4 w-4 mr-1" />
-              复制
+              全部复制
             </Button>
 
             {/* 导出菜单 */}
@@ -1032,7 +1470,8 @@ export function AnalysisTable() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={filteredAndSortedData.length === 0}
+                disabled={filteredData.length === 0}
+                className="shadow-sm"
               >
                 <Download className="h-4 w-4 mr-1" />
                 导出
@@ -1069,6 +1508,7 @@ export function AnalysisTable() {
               size="sm"
               onClick={handleDeleteSelected}
               disabled={selectedIds.length === 0}
+              className="shadow-sm border-red-200 text-red-600 hover:bg-red-50"
             >
               <Trash2 className="h-4 w-4 mr-1" />
               删除选中
@@ -1078,257 +1518,304 @@ export function AnalysisTable() {
               variant="outline"
               size="sm"
               onClick={handleClearAll}
-              disabled={analysisData.length === 0}
+              disabled={totalCount === 0}
+              className="shadow-sm border-red-200 text-red-600 hover:bg-red-50"
             >
               <Trash2 className="h-4 w-4 mr-1" />
-              清空
+              清空所有
             </Button>
           </div>
         </div>
 
+        {/* 进度条 */}
+        {isAnalyzing && analysisProgress.isActive && (
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium">
+                分析进度 - {getStageText(analysisProgress.stage)}
+              </div>
+              <div className="text-sm text-gray-600">
+                {analysisProgress.current} / {analysisProgress.total}
+              </div>
+            </div>
+            <Progress 
+              value={(analysisProgress.current / analysisProgress.total) * 100} 
+              className="h-2"
+            />
+            {analysisProgress.currentUrl && (
+              <div className="text-xs text-gray-500 mt-1 truncate">
+                正在处理: {analysisProgress.currentUrl}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 表格设置面板 */}
         {showTableSettings && (
-          <div className="mt-4 p-4 border rounded-lg bg-gray-50">
-            <div className="flex items-center gap-4">
-              <div className="text-sm text-gray-600">
-                固定每页显示 100 条记录
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
+            <div className="text-sm font-medium mb-2">表格设置</div>
+            <div className="space-y-2 text-sm">
+              <div className="text-gray-600">
+                • 当前显示: {hasLocalFilter ? '使用本地筛选' : '服务端分页'}
               </div>
+              <div className="text-gray-600">
+                • 每页显示: {itemsPerPage} 条记录
+              </div>
+              <div className="text-gray-600">
+                • 总计: {totalCount} 条记录
+              </div>
+              {hasLocalFilter && (
+                <div className="text-orange-600">
+                  • 注意: 启用筛选时显示当前页的筛选结果
+                </div>
+              )}
             </div>
           </div>
         )}
-      </CardHeader>
 
-      <CardContent>
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12">
-                  <Checkbox
-                    checked={paginatedData.length > 0 && selectedIds.length === paginatedData.length}
-                    onCheckedChange={handleSelectAll}
-                  />
-                </TableHead>
-                <TableHead>网站链接</TableHead>
-                <TableHead className="w-24">判断结果</TableHead>
-                <TableHead>判断依据</TableHead>
-                <TableHead>公司信息</TableHead>
-                <TableHead>邮箱信息</TableHead>
-                <TableHead className="w-32">状态</TableHead>
-                <TableHead className="w-24">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {paginatedData.length === 0 ? (
+        {/* 数据表格 */}
+        <div className="mt-4">
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    暂无数据
-                  </TableCell>
+                  <TableHead className="w-12">
+                    <Checkbox
+                      checked={filteredData.length > 0 && selectedIds.length === filteredData.length}
+                      onCheckedChange={handleSelectAll}
+                    />
+                  </TableHead>
+                  <TableHead>网站链接</TableHead>
+                  <TableHead className="w-24">判断结果</TableHead>
+                  <TableHead>判断依据</TableHead>
+                  <TableHead>公司信息</TableHead>
+                  <TableHead>邮箱信息</TableHead>
+                  <TableHead className="w-32">状态</TableHead>
+                  <TableHead className="w-24">操作</TableHead>
                 </TableRow>
-              ) : (
-                paginatedData.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedIds.includes(item.id)}
-                        onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <a 
-                        href={item.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline max-w-xs truncate block"
-                        title={item.url}
-                      >
-                        {item.url}
-                      </a>
-                    </TableCell>
-                    <TableCell>{getResultBadge(item.result)}</TableCell>
-                    <TableCell>
-                      {item.reason && (
-                        <div className="max-w-xs">
-                          <div 
-                            className={`${expandedReasons.has(item.id) ? '' : 'line-clamp-2'} text-sm text-gray-600`}
-                          >
-                            {item.reason}
-                          </div>
-                          {item.reason.length > 100 && (
-                            <button
-                              type="button"
-                              onClick={() => toggleReasonExpansion(item.id)}
-                              className="text-xs text-blue-600 hover:underline mt-1"
-                            >
-                              {expandedReasons.has(item.id) ? '收起' : '展开'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {item.companyInfo && (
-                        <div className="text-sm">
-                          <div className="font-medium">{formatCompanyInfo(item.companyInfo)}</div>
-                          {item.companyInfo.founderNames?.length > 0 && (
-                            <div className="text-gray-500 text-xs">
-                              创始人: {item.companyInfo.founderNames.join(', ')}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {item.emails && item.emails.length > 0 && (
-                        <div className="text-sm">
-                          <div className="flex items-center gap-1">
-                            <Mail className="h-3 w-3" />
-                            <span>{formatEmails(item.emails)}</span>
-                          </div>
-                          {item.emails.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => toggleEmailExpansion(item.id)}
-                              className="text-xs text-blue-600 hover:underline mt-1"
-                            >
-                              {expandedEmails.has(item.id) ? '收起' : '查看详情'}
-                            </button>
-                          )}
-                          {expandedEmails.has(item.id) && (
-                            <div className="mt-2 space-y-1">
-                              {item.emails.map((email, idx) => (
-                                <div key={idx} className="text-xs text-gray-600">
-                                  {email.email}
-                                  {email.ownerName && ` (${email.ownerName})`}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(item.status)}
-                          <span className="text-sm">{getStatusText(item.status)}</span>
-                        </div>
-                        
-                        {/* 显示详细错误信息 */}
-                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && item.errorDetails && (
-                          <div className="mt-1">
-                            <div className="text-xs bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-medium text-red-800">
-                                  {getErrorTypeText(item.errorDetails.type)}
-                                </span>
-                                <Badge 
-                                  variant={item.errorDetails.retryable ? "secondary" : "destructive"} 
-                                  className="text-xs px-1 py-0"
-                                >
-                                  {item.errorDetails.retryable ? '可重试' : '不可重试'}
-                                </Badge>
-                              </div>
-                              <div className="text-red-600 break-words">
-                                阶段: {item.errorDetails.stage === 'crawling' ? '网站爬取' : 
-                                      item.errorDetails.stage === 'ai_analysis' ? 'AI分析' : 
-                                      item.errorDetails.stage === 'info_extraction' ? '信息提取' : '初始化'}
-                              </div>
-                              <div className="text-red-600 break-words mt-1">
-                                {item.errorDetails.message}
-                              </div>
-                              {item.errorDetails.statusCode && (
-                                <div className="text-red-500 text-xs mt-1">
-                                  状态码: {item.errorDetails.statusCode}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* 兼容旧的错误显示 */}
-                        {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && !item.errorDetails && item.error && (
-                          <div className="mt-1">
-                            <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
-                              <div className="font-medium mb-1">错误信息:</div>
-                              <div className="break-words">{item.error}</div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {item.result === 'Y' && !item.hasInfoCrawled && item.status === 'completed' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleCrawlCompanyInfo(item.id, item.url)}
-                          disabled={isAnalyzing}
-                        >
-                          <Mail className="h-3 w-3" />
-                        </Button>
-                      )}
+              </TableHeader>
+              <TableBody>
+                {filteredData.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                      暂无数据
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        {/* 分页控制 */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4">
-            <div className="text-sm text-muted-foreground">
-              显示 {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, filteredAndSortedData.length)} 条，
-              共 {filteredAndSortedData.length} 条
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                disabled={currentPage === 1}
-              >
-                上一页
-              </Button>
-              <div className="flex items-center gap-1">
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum: number
-                  if (totalPages <= 5) {
-                    pageNum = i + 1
-                  } else if (currentPage <= 3) {
-                    pageNum = i + 1
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i
-                  } else {
-                    pageNum = currentPage - 2 + i
-                  }
-                  
-                  return (
-                    <Button
-                      key={pageNum}
-                      variant={currentPage === pageNum ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(pageNum)}
-                    >
-                      {pageNum}
-                    </Button>
-                  )
-                })}
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                disabled={currentPage === totalPages}
-              >
-                下一页
-              </Button>
-            </div>
+                ) : (
+                  filteredData.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.includes(item.id)}
+                          onCheckedChange={(checked) => handleSelectItem(item.id, checked as boolean)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <a 
+                          href={item.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline max-w-xs truncate block"
+                          title={item.url}
+                        >
+                          {item.url}
+                        </a>
+                      </TableCell>
+                      <TableCell>{getResultBadge(item.result)}</TableCell>
+                      <TableCell>
+                        {item.reason && (
+                          <div className="max-w-xs">
+                            <div 
+                              className={`${expandedReasons.has(item.id) ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'} text-sm text-gray-600`}
+                            >
+                              {item.reason}
+                            </div>
+                            {item.reason.length > 100 && (
+                              <div className="mt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleReasonExpansion(item.id)}
+                                  className="text-xs text-blue-600 hover:underline block"
+                                >
+                                  {expandedReasons.has(item.id) ? '收起' : '展开'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {item.companyInfo && (
+                          <div className="text-sm">
+                            <div className="font-medium">{formatCompanyInfo(item.companyInfo)}</div>
+                            {item.companyInfo.founderNames?.length > 0 && (
+                              <div className="text-gray-500 text-xs">
+                                创始人: {item.companyInfo.founderNames.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {item.emails && item.emails.length > 0 && (
+                          <div className="text-sm">
+                            <div className="flex items-center gap-1">
+                              <Mail className="h-3 w-3" />
+                              <span>{formatEmails(item.emails)}</span>
+                            </div>
+                            {item.emails.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleEmailExpansion(item.id)}
+                                className="text-xs text-blue-600 hover:underline mt-1"
+                              >
+                                {expandedEmails.has(item.id) ? '收起' : '查看详情'}
+                              </button>
+                            )}
+                            {expandedEmails.has(item.id) && (
+                              <div className="mt-2 space-y-1">
+                                {item.emails.map((email, idx) => (
+                                  <div key={idx} className="text-xs text-gray-600">
+                                    {email.email}
+                                    {email.ownerName && ` (${email.ownerName})`}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            {getStatusIcon(item.status)}
+                            <span className="text-sm">{getStatusText(item.status)}</span>
+                          </div>
+                          
+                          {/* 显示详细错误信息 */}
+                          {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && item.errorDetails && (
+                            <div className="mt-1">
+                              <div className="text-xs bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="font-medium text-red-800">
+                                    {getErrorTypeText(item.errorDetails.type)}
+                                  </span>
+                                  <Badge 
+                                    variant={item.errorDetails.retryable ? "secondary" : "destructive"} 
+                                    className="text-xs px-1 py-0"
+                                  >
+                                    {item.errorDetails.retryable ? '可重试' : '不可重试'}
+                                  </Badge>
+                                </div>
+                                <div className="text-red-600 break-words">
+                                  阶段: {item.errorDetails.stage === 'crawling' ? '网站爬取' : 
+                                        item.errorDetails.stage === 'ai_analysis' ? 'AI分析' : 
+                                        item.errorDetails.stage === 'info_extraction' ? '信息提取' : '初始化'}
+                                </div>
+                                <div className="text-red-600 break-words mt-1">
+                                  {item.errorDetails.message}
+                                </div>
+                                {item.errorDetails.statusCode && (
+                                  <div className="text-red-500 text-xs mt-1">
+                                    状态码: {item.errorDetails.statusCode}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* 兼容旧的错误显示 */}
+                          {(item.status === 'failed' || item.status === 'crawl-failed' || item.status === 'analysis-failed' || item.status === 'info-crawl-failed') && !item.errorDetails && item.error && (
+                            <div className="mt-1">
+                              <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 max-w-xs">
+                                <div className="font-medium mb-1">错误信息:</div>
+                                <div className="break-words">{item.error}</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {item.result === 'Y' && !item.hasInfoCrawled && item.status === 'completed' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleCrawlCompanyInfo(item.id, item.url)}
+                            disabled={isAnalyzing}
+                          >
+                            <Mail className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
           </div>
-        )}
-      </CardContent>
+
+          {/* 分页控制 */}
+          {!hasLocalFilter && totalPages > 1 && (
+            <div className="flex items-center justify-between mt-4">
+              <div className="text-sm text-muted-foreground">
+                显示 {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, totalCount)} 条，
+                共 {totalCount} 条
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                
+                {(() => {
+                  const pages = []
+                  const startPage = Math.max(1, currentPage - 2)
+                  const endPage = Math.min(totalPages, startPage + 4)
+                  
+                  for (let i = startPage; i <= endPage; i++) {
+                    pages.push(
+                      <Button
+                        key={`page-${i}`}
+                        variant={currentPage === i ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setPage(i)}
+                      >
+                        {i}
+                      </Button>
+                    )
+                  }
+                  return pages
+                })()}
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  <ChevronRightIcon className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* 本地筛选时的提示 */}
+          {hasLocalFilter && (
+            <div className="flex items-center justify-between mt-4">
+              <div className="text-sm text-muted-foreground">
+                当前筛选显示 {filteredData.length} 条记录（来自第 {currentPage} 页的 {analysisData.length} 条记录）
+              </div>
+              <div className="text-xs text-orange-600">
+                筛选仅应用于当前页数据
+              </div>
+            </div>
+          )}
+        </div>
+      </CardHeader>
     </Card>
   )
 } 

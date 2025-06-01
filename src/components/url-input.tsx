@@ -5,18 +5,19 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Plus, Upload, Play, PlayCircle, AlertTriangle } from 'lucide-react'
-import { useAnalysisStore } from '@/store/analysis-store'
+import { useStore } from '@/store/analysis-store'
 import { toast } from 'sonner'
 
 export function UrlInput() {
   const [inputText, setInputText] = useState('')
   const [backgroundTaskId, setBackgroundTaskId] = useState<string | null>(null)
-  const { addUrls, config, addBackgroundTask, syncBackgroundTaskResults } = useAnalysisStore()
+  const [isAdding, setIsAdding] = useState(false)
+  const { addUrls, config, addBackgroundTask, syncBackgroundTaskResults } = useStore()
 
   // 检查配置状态
   const isConfigComplete = !!(config?.apiKey && config?.apiUrl && config?.modelName)
 
-  const handleAddUrls = () => {
+  const handleAddUrls = async () => {
     if (!inputText.trim()) {
       toast.error('请输入网站链接')
       return
@@ -58,14 +59,26 @@ export function UrlInput() {
     }
 
     if (validUrls.length > 0) {
-      // 直接添加到分析表格
-      addUrls(validUrls)
-      setInputText('')
-      
-      toast.success(`成功添加 ${validUrls.length} 个网站链接`, {
-        description: isConfigComplete ? '请点击分析表格中的开始按钮开始分析' : '请先完成AI配置',
-        duration: 5000
-      })
+      setIsAdding(true)
+      try {
+        // 使用异步添加URL
+        const success = await addUrls(validUrls)
+        
+        if (success) {
+          setInputText('')
+          toast.success(`成功添加 ${validUrls.length} 个网站链接`, {
+            description: isConfigComplete ? '请点击分析表格中的开始按钮开始分析' : '请先完成AI配置',
+            duration: 5000
+          })
+        } else {
+          toast.error('添加URL失败，请重试')
+        }
+      } catch (error) {
+        console.error('添加URL失败:', error)
+        toast.error('添加URL失败，请重试')
+      } finally {
+        setIsAdding(false)
+      }
     }
   }
 
@@ -128,7 +141,7 @@ export function UrlInput() {
           const statusData = await statusResponse.json()
           
           // 实时更新前端状态
-          updateRealtimeStatus(statusData)
+          await updateRealtimeStatus(statusData)
           
           if (statusData.status === 'completed') {
             clearInterval(monitorInterval)
@@ -152,60 +165,55 @@ export function UrlInput() {
   }
 
   // 实时更新状态和结果
-  const updateRealtimeStatus = (statusData: any) => {
-    const { updateResult, analysisData, addUrls } = useAnalysisStore.getState()
+  const updateRealtimeStatus = async (statusData: any) => {
+    const store = useStore()
     
     try {
-      // 确保所有URL都已添加到分析数据中
-      const existingUrls = new Set(analysisData.map(item => item.url))
+      // 确保所有新URL都已添加到分析数据中
       const allUrls = [
         ...statusData.recentResults?.map((r: any) => r.url) || [],
         ...statusData.recentErrors?.map((e: any) => e.url) || [],
         ...statusData.currentlyProcessing || []
-      ]
+      ].filter(url => url)
       
-      const newUrls = allUrls.filter(url => url && !existingUrls.has(url))
-      if (newUrls.length > 0) {
-        console.log('添加缺失的URL到分析数据:', newUrls)
-        addUrls(newUrls)
+      if (allUrls.length > 0) {
+        // 添加新URL（API会自动去重）
+        await store.addUrls(allUrls)
       }
-      
-      // 获取最新的分析数据
-      const latestAnalysisData = useAnalysisStore.getState().analysisData
       
       // 更新正在处理的URL状态
       if (statusData.currentlyProcessing && statusData.currentlyProcessing.length > 0) {
-        statusData.currentlyProcessing.forEach((url: string) => {
-          const existingItem = latestAnalysisData.find(item => item.url === url)
+        for (const url of statusData.currentlyProcessing) {
+          const existingItem = store.analysisData.find(item => item.url === url)
           if (existingItem && existingItem.status === 'waiting') {
-            updateResult(existingItem.id, {
+            await store.updateResult(existingItem.id, {
               status: 'analyzing'
             })
           }
-        })
+        }
       }
       
       // 更新最近完成的结果
       if (statusData.recentResults && statusData.recentResults.length > 0) {
-        statusData.recentResults.forEach((result: any) => {
-          const existingItem = latestAnalysisData.find(item => item.url === result.url)
+        for (const result of statusData.recentResults) {
+          const existingItem = store.analysisData.find(item => item.url === result.url)
           if (existingItem) {
-            updateResult(existingItem.id, {
+            await store.updateResult(existingItem.id, {
               result: result.analyzeData?.result || 'PENDING',
               reason: result.analyzeData?.reason || '',
               status: 'completed',
               crawledContent: result.crawlData
             })
           }
-        })
+        }
       }
       
       // 更新最近的错误
       if (statusData.recentErrors && statusData.recentErrors.length > 0) {
-        statusData.recentErrors.forEach((error: any) => {
-          const existingItem = latestAnalysisData.find(item => item.url === error.url)
+        for (const error of statusData.recentErrors) {
+          const existingItem = store.analysisData.find(item => item.url === error.url)
           if (existingItem) {
-            updateResult(existingItem.id, {
+            await store.updateResult(existingItem.id, {
               result: 'ERROR',
               reason: error.message,
               status: 'failed',
@@ -218,7 +226,7 @@ export function UrlInput() {
               }
             })
           }
-        })
+        }
       }
     } catch (error) {
       console.error('更新实时状态失败:', error)
@@ -240,80 +248,59 @@ export function UrlInput() {
   const urlCount = inputText.split('\n').filter(line => line.trim()).length
 
   return (
-    <Card>
+    <Card className="shadow-sm border-slate-200 bg-white/90">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Plus className="h-5 w-5" />
-          添加网站链接
+          <Plus className="h-5 w-5 text-green-600" />
+          批量添加网站链接
         </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          输入要分析的网站链接，每行一个，支持文件批量导入
+        </p>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div>
+      <CardContent>
+        <div className="space-y-4">
           <Textarea
-            placeholder="请输入网站链接，每行一个：&#10;example.com&#10;https://another-site.com&#10;www.third-site.com"
+            placeholder="请输入网站链接，每行一个，例如：&#10;https://example.com&#10;https://company.com&#10;www.website.com"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            rows={6}
-            className="resize-none"
+            className="min-h-32 resize-none shadow-sm"
           />
-          <p className="text-sm text-muted-foreground mt-2">
-            支持多种格式：example.com、https://example.com、www.example.com
-            <br />
-            <span className="text-blue-600 font-medium">✨ 添加后请在分析表格中点击开始按钮开始分析</span>
-          </p>
-        </div>
-
-        {!isConfigComplete && (
-          <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-            <AlertTriangle className="h-4 w-4 text-yellow-600" />
-            <span className="text-sm text-yellow-800">
-              请先完成AI配置，然后在分析表格中点击开始按钮
-            </span>
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <Button onClick={handleAddUrls} className="flex-1">
-            <Plus className="h-4 w-4 mr-2" />
-            添加到分析列表
-          </Button>
           
-          <div className="relative">
-            <input
-              type="file"
-              accept=".txt,.csv"
-              onChange={handleFileUpload}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            />
-            <Button variant="outline">
-              <Upload className="h-4 w-4 mr-2" />
-              上传文件
+          <div className="flex gap-2">
+            <Button 
+              onClick={handleAddUrls} 
+              className="flex-1 bg-green-600 hover:bg-green-700 shadow-sm" 
+              disabled={isAdding}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              {isAdding ? '添加中...' : '添加到分析列表'}
             </Button>
+            
+            <div className="relative">
+              <Button variant="outline" className="shadow-sm">
+                <Upload className="h-4 w-4 mr-2" />
+                文件导入
+              </Button>
+              <input
+                type="file"
+                accept=".txt,.csv"
+                onChange={handleFileUpload}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+            </div>
           </div>
+          
+          {/* 配置状态提示 */}
+          {!isConfigComplete && (
+            <div className="flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+              <AlertTriangle className="h-4 w-4 text-orange-600" />
+              <span className="text-sm text-orange-700">
+                请先完成 <a href="/config" className="underline font-medium">AI配置</a> 后再开始分析
+              </span>
+            </div>
+          )}
         </div>
-
-        {inputText && (
-          <div className="text-sm text-muted-foreground">
-            当前输入了 {urlCount} 个链接
-            <span className="ml-2 text-blue-600 font-medium">
-              · 添加后请在分析表格中点击开始按钮
-            </span>
-          </div>
-        )}
-
-        {backgroundTaskId && (
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
-            <div className="text-sm text-blue-800">
-              <strong>后台任务已创建</strong>
-            </div>
-            <div className="text-xs text-blue-600 mt-1">
-              任务ID: {backgroundTaskId}
-            </div>
-            <div className="text-xs text-blue-600">
-              即使关闭页面，任务也会继续运行
-            </div>
-          </div>
-        )}
       </CardContent>
     </Card>
   )
